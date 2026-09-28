@@ -218,12 +218,13 @@ def check_results() -> dict:
 def _resolve_data_dir(cli_dir: str | None) -> tuple[Path, bool]:
     """State-Verzeichnis für den Test – immer ISOLIERT.
 
-    Präzedenz: --dir  >  bereits gesetztes ZHF_DATA_DIR  >  data/synth im Repo.
+    Präzedenz: --dir  >  ZHF_SELFTEST_DIR  >  ZHF_DATA_DIR  >  data/synth im Repo.
     (Ein DATA_DIR-Wert nur in .env verschiebt den Live-State, nicht aber den
     Selbsttest – der nutzt bewusst einen eigenen Ordner.)
     Returns (pfad, vom_test_erzeugt).
     """
-    raw = cli_dir or os.environ.get("ZHF_DATA_DIR") or str(ROOT / "data" / "synth")
+    raw = (cli_dir or os.environ.get("ZHF_SELFTEST_DIR")
+           or os.environ.get("ZHF_DATA_DIR") or str(ROOT / "data" / "synth"))
     path = Path(raw).expanduser()
     if not path.is_absolute():
         path = ROOT / path

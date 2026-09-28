@@ -6,6 +6,14 @@ und die Versionierung folgt [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.1] – FreeZen (Patch) – 2026-09-28
 
+### Geändert (Nachzug)
+- `Config.SELFTEST_DIR` (env `ZHF_SELFTEST_DIR`, leer = Default) als fester Ort für
+  den Selbsttest; `--dir` schlägt ihn. `ensure_dirs()` legt ihn an.
+- `fills.log`-Schreiber garantiert einen Zeitstempel (ohne ihn verschwindet der Trade
+  beim Lesen), ignorierte Zeilen werden laut gemeldet.
+- Watchdog löst den Killswitch nur bei verbundenem Broker aus.
+
+
 ### Behoben
 - **Alpaca-Marktdaten:** `feed` wird pro Request gesetzt (`auto` → `iex`; Free-Plan
   darf kein SIP für Daten < 15 min), `end` timezone-bewahrt, Uhrzeit-Drift-Warnung,
@@ -46,7 +54,7 @@ und die Versionierung folgt [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scripts/common/fills.py` – gemeinsames Fills-Schema inkl. Archivierung alter Zeilen.
 - Watchdog: Killswitch greift nur bei verbundenem Broker (sonst blockiert ein
   unbearbeitetes Frisch-Setup jede Pipeline), `next_steps` im Report.
-- Test-Suite: 12 Dateien / 98 Tests, komplett offline (`python -m pytest`),
+- Test-Suite: 12 Dateien / 100 Tests, komplett offline (`python -m pytest`),
   inklusive End-to-End-Selbsttest als subprocess (`-m integration`).
 - `requirements-dev.txt`, `pytest.ini`.
 

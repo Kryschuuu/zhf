@@ -140,10 +140,15 @@ class Config:
     LOG_DIR: Path = _path(os.getenv("LOG_DIR"), DATA_DIR / "logs")
     STRATEGIES_DIR: Path = _path(os.getenv("STRATEGIES_DIR"), ROOT / "strategies")
     PROMPTS_DIR: Path = _path(os.getenv("PROMPTS_DIR"), ROOT / "prompts")
+    # Verzeichnis für den Selbsttest (scripts.monitoring.synth_test). Bewusst ein
+    # eigener Pfad: der Live-State (signals/orders/logs) darf von Tests nicht
+    # überschrieben werden. --dir auf der CLI hat immer Vorrang.
+    SELFTEST_DIR: Path = _path(os.getenv("ZHF_SELFTEST_DIR"),
+                               ROOT / "data" / "synth")
 
     @classmethod
     def ensure_dirs(cls) -> None:
-        for d in (cls.DATA_DIR, cls.REPORTS_DIR, cls.LOG_DIR,
+        for d in (cls.DATA_DIR, cls.REPORTS_DIR, cls.LOG_DIR, cls.SELFTEST_DIR,
                   cls.DATA_DIR / "market_data", cls.DATA_DIR / "backtest_results",
                   cls.DATA_DIR / "signals", cls.DATA_DIR / "orders",
                   cls.DATA_DIR / "heartbeats"):

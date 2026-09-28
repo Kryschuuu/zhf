@@ -77,7 +77,7 @@ python -m scripts.monitoring.watchdog --reset-killswitch   # schreibt active=fal
 
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m pytest            # 98 Tests, komplett offline (Stubs, Fake-HTTP, gefälschte Zeit)
+python -m pytest            # 100 Tests, komplett offline (Stubs, Fake-HTTP, gefälschte Zeit)
 python -m pytest -m integration -q   # nur die End-to-End-Läufe
 ```
 

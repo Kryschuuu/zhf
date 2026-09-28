@@ -228,3 +228,37 @@ def test_ceo_degrades_weights_on_repeated_errors(monkeypatch, tmp_path):
     w = ceo._auto_adjust_weights(bad)
     assert w["breakout"] < 1.0
     assert (tmp_path / "strategy_weights.json").exists()
+
+
+def test_selftest_dir_isolates_and_overridable(monkeypatch):
+    """SELFTEST_DIR liegt immer ausserhalb des Live-States und ist leer-sicher."""
+    import os
+    import scripts.common.config as C
+    prev = os.environ.get("ZHF_SELFTEST_DIR")
+    try:
+        monkeypatch.delenv("ZHF_SELFTEST_DIR", raising=False)
+        importlib.reload(C)
+        assert C.cfg.SELFTEST_DIR == C.ROOT / "data" / "synth"
+        assert C.cfg.SELFTEST_DIR != C.cfg.DATA_DIR          # nie in den Live-State
+        monkeypatch.setenv("ZHF_SELFTEST_DIR", "")           # leer in .env = Default
+        importlib.reload(C)
+        assert C.cfg.SELFTEST_DIR == C.ROOT / "data" / "synth"
+        monkeypatch.setenv("ZHF_SELFTEST_DIR", "/tmp/zhf-selftest")
+        importlib.reload(C)
+        assert C.cfg.SELFTEST_DIR == Path("/tmp/zhf-selftest")
+    finally:
+        if prev:
+            os.environ["ZHF_SELFTEST_DIR"] = prev
+        else:
+            monkeypatch.delenv("ZHF_SELFTEST_DIR", raising=False)
+        importlib.reload(C)
+
+
+def test_selftest_state_dir_precedence(monkeypatch):
+    from scripts.monitoring.synth_test import _resolve_data_dir
+    explicit, created = _resolve_data_dir("/tmp/zhf-explicit")
+    assert str(explicit) == "/tmp/zhf-explicit" and created is True
+    monkeypatch.setenv("ZHF_SELFTEST_DIR", "/tmp/zhf-from-env")
+    from_env, _ = _resolve_data_dir(None)
+    assert str(from_env) == "/tmp/zhf-from-env"
+    assert str(from_env) != str(cfg.DATA_DIR)

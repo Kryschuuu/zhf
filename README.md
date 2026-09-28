@@ -129,7 +129,7 @@ Die Heartbeats werden danach automatisch von Paperclip getriggert.
 ### 7. Tests und Konfig-Abgleich
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m pytest              # 98 Tests, komplett offline (keine Broker-Requests)
+python -m pytest              # 100 Tests, komplett offline (keine Broker-Requests)
 python -m scripts.sync_env    # fehlende .env-Schlüssel aus .env.example ergänzen
 python -m scripts.materialize_config   # Paperclip-Config auf den echten Repo-Pfad setzen
 ```

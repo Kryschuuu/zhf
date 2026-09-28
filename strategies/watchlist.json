@@ -1,0 +1,12 @@
+[
+  {"symbol": "SPY",    "broker": "alpaca", "market": "stocks",  "timeframe": "1h"},
+  {"symbol": "QQQ",    "broker": "alpaca", "market": "stocks",  "timeframe": "1h"},
+  {"symbol": "AAPL",   "broker": "alpaca", "market": "stocks",  "timeframe": "1h"},
+  {"symbol": "MSFT",   "broker": "alpaca", "market": "stocks",  "timeframe": "1h"},
+  {"symbol": "NVDA",   "broker": "alpaca", "market": "stocks",  "timeframe": "1h"},
+  {"symbol": "TSLA",   "broker": "alpaca", "market": "stocks",  "timeframe": "1h"},
+  {"symbol": "AMD",    "broker": "alpaca", "market": "stocks",  "timeframe": "1h"},
+  {"symbol": "META",   "broker": "alpaca", "market": "stocks",  "timeframe": "1h"},
+  {"symbol": "BTC/USD","broker": "alpaca", "market": "crypto", "timeframe": "1h"},
+  {"symbol": "ETH/USD","broker": "alpaca", "market": "crypto", "timeframe": "1h"}
+]

@@ -1,0 +1,130 @@
+{
+  "company": "zhf-trading",
+  "agents": [
+    {
+      "name": "Elara Voss",
+      "title": "Chief Executive Officer",
+      "reports_to": "board",
+      "adapter_type": "opencode_local",
+      "adapter_config": {
+        "cwd": "/home/user/zhf",
+        "model": "opencode/nemotron-3-ultra-free",
+        "system_prompt_file": "/home/user/zhf/prompts/ceo.md",
+        "cli_flags": ["--auto"]
+      },
+      "budget_monthly_cents": 0,
+      "heartbeat_cron": "0 4 * * 2-6",
+      "context_mode": "fat",
+      "skills": ["agents/ceo/skills/"]
+    },
+    {
+      "name": "Jordan Chen",
+      "title": "Head of Research",
+      "reports_to": "Elara Voss",
+      "adapter_type": "opencode_local",
+      "adapter_config": {
+        "cwd": "/home/user/zhf",
+        "model": "opencode/big-pickle",
+        "system_prompt_file": "/home/user/zhf/prompts/research_agent.md",
+        "cli_flags": ["--auto"]
+      },
+      "budget_monthly_cents": 0,
+      "heartbeat_cron": "*/30 * * * *",
+      "context_mode": "thin",
+      "skills": ["agents/research_agent/skills/"]
+    },
+    {
+      "name": "Priya Patel",
+      "title": "Head of Strategy Validation",
+      "reports_to": "Elara Voss",
+      "adapter_type": "process",
+      "adapter_config": {
+        "cwd": "/home/user/zhf",
+        "command": "/home/user/zhf/.venv/bin/python -m scripts.backtest.run",
+        "env": {
+          "OPENCODE_MODEL_REVIEW": "opencode/gpt-5-nano"
+        }
+      },
+      "budget_monthly_cents": 0,
+      "heartbeat_cron": "*/15 * * * *"
+    },
+    {
+      "name": "Marcus Okonkwo",
+      "title": "Chief Risk Officer",
+      "reports_to": "Elara Voss",
+      "adapter_type": "process",
+      "adapter_config": {
+        "cwd": "/home/user/zhf",
+        "command": "/home/user/zhf/.venv/bin/python -m scripts.risk.run",
+        "env": {
+          "OPENCODE_MODEL_RISK": "opencode/minimax-m2.5-free"
+        }
+      },
+      "budget_monthly_cents": 0,
+      "heartbeat_cron": "*/5 * * * *"
+    },
+    {
+      "name": "Sasha Kowalski",
+      "title": "Head of Trade Execution",
+      "reports_to": "Elara Voss",
+      "adapter_type": "process",
+      "adapter_config": {
+        "cwd": "/home/user/zhf",
+        "command": "/home/user/zhf/.venv/bin/python -m scripts.execution.run"
+      },
+      "budget_monthly_cents": 0,
+      "heartbeat_cron": "* 13-22 * * 1-5",
+      "execution_policy": "requires_cro_approval"
+    },
+    {
+      "name": "Naomi Bergström",
+      "title": "Head of Operational Efficiency",
+      "reports_to": "Elara Voss",
+      "adapter_type": "process",
+      "adapter_config": {
+        "cwd": "/home/user/zhf",
+        "command": "/home/user/zhf/.venv/bin/python -m scripts.cost.run",
+        "env": {
+          "OPENCODE_MODEL_COST": "opencode/mimo-v2.5-flash-free"
+        }
+      },
+      "budget_monthly_cents": 0,
+      "heartbeat_cron": "0 * * * *"
+    },
+    {
+      "name": "Watchdog",
+      "title": "System Monitor",
+      "reports_to": "Elara Voss",
+      "adapter_type": "process",
+      "adapter_config": {
+        "cwd": "/home/user/zhf",
+        "command": "/home/user/zhf/.venv/bin/python -m scripts.monitoring.watchdog"
+      },
+      "budget_monthly_cents": 0,
+      "heartbeat_cron": "*/10 * * * *"
+    }
+  ],
+  "routines": {
+    "daily_ceo": {
+      "agent": "Elara Voss",
+      "cron": "0 4 * * 2-6",
+      "task": "Führe den täglichen End-of-Day Briefing gemäss daily-briefing Skill aus. Lese alle Reports, schreibe daily_report.md. Nutze dafür opencode/nemotron-3-ultra-free."
+    },
+    "ceo_monthly_review": {
+      "agent": "Elara Voss",
+      "cron": "0 6 1 * *",
+      "task": "Monatsbericht: 30-Tage-Performance, Skalierungs-Empfehlung, Watchlist-Anpassung."
+    }
+  },
+  "execution_policies": {
+    "live_trade_requires_board_approval": true,
+    "paper_trade_requires_cro_approval": true,
+    "kill_switch_can_only_be_reset_by_board_after_drawdown": true
+  },
+  "model_policy": {
+    "preferred_provider": "opencode",
+    "free_only": true,
+    "fallback_provider": "lmstudio",
+    "fallback_when": ["network_error", "rate_limit", "timeout"]
+  }
+}

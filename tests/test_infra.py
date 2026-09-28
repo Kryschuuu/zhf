@@ -204,15 +204,19 @@ def test_watchdog_all_green_is_not_critical(isolated_stub, monkeypatch):
 
 
 # ------------------------------------------------------------------ CEO
-def test_ceo_reads_current_fee_report_shape(isolated_stub, monkeypatch):
+def test_ceo_reads_current_fee_report_shape(isolated_stub, monkeypatch, tmp_path):
     """CEO darf sich nicht auf ein veraltetes Report-Schema abstützen (None im Bericht)."""
     import scripts.ceo.daily as ceo
     from scripts.common.fills import append_fill
+    log = tmp_path / "fills.log"                      # eigenes Log -> kein Test-Rückstau
     append_fill({"broker": "synth", "symbol": "AAA", "side": "BUY", "qty": 1.0,
                  "avg_price": 100.0, "order_id": "o1", "status": "FILLED",
-                 "strategy": "mean_reversion", "notional_usd": 100.0})
+                 "strategy": "mean_reversion", "notional_usd": 100.0}, path=log)
+    monkeypatch.setattr("scripts.common.fills.FILLS_PATH", log)
     fills = ceo._today_fills()
-    assert len(fills) == 1
+    assert len(fills) == 1, fills
+    assert fills[0]["symbol"] == "AAA"
+    monkeypatch.setattr(ceo.cfg, "STRATEGIES_DIR", tmp_path)
     w = ceo._auto_adjust_weights(fills)          # 1 Fill, kein Fehler -> keine Änderung
     assert w["mean_reversion"] == 1.0
 

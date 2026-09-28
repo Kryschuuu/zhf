@@ -33,3 +33,6 @@ node_modules/
 data/synth/
 data/**/equity_history.jsonl
 data/logs/pipeline.log*
+
+# Lokal materialisierte Konfiguration (Pfade je Maschine)
+config/paperclip_agents.local.json

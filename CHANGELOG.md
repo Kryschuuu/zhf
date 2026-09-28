@@ -4,6 +4,58 @@ Alle bemerkenswerten Änderungen am ZHF Multi-Agent Trading System werden in
 dieser Datei dokumentiert. Das Format folgt [Keep a Changelog](https://keepachangelog.com/de/1.0.0/)
 und die Versionierung folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] – FreeZen (Patch) – 2026-09-28
+
+### Behoben
+- **Alpaca-Marktdaten:** `feed` wird pro Request gesetzt (`auto` → `iex`; Free-Plan
+  darf kein SIP für Daten < 15 min), `end` timezone-bewahrt, Uhrzeit-Drift-Warnung,
+  letzte (noch offene) Bar wird verworfen (`ALPACA_DROP_PARTIAL_BAR`).
+- **Bitunix-Adapter:** richtige Base-URL (`https://fapi.bitunix.com` – ein
+  `fapi-sim`-Testnet existiert nicht), Signierung/Nonce/Header gemäß Doku, Toleranz
+  bei leeren Antworten, `BITUNIX_TESTNET=true` = **read-only** (Live-Orders nur mit
+  `BITUNIX_ALLOW_LIVE_ORDERS=true`), Fill-Status über `get_order_detail`.
+- **BingX/CCXT:** `set_sandbox_mode(True)` statt ignoriertem Konstruktor-Argument,
+  Perp-Symbolauflösung (`BTC/USDT:USDT`), OrderStatus aus `fetch_order`.
+- **Testdaten im Live-Pfad:** der Selbsttest schreibt nicht mehr in `data/signals`
+  (Platzhalter `SYNTH_*` landeten bei Alpaca). Isolation über `ZHF_DATA_DIR`
+  (`data/synth`), Broker `synth`, Fabrikgate + Symbolhygiene.
+- **„Keine Daten“ ≠ „keine Chance“:** `data_status` je Asset
+  (`ok/empty/error/stale`), Risk meldet `data_insufficient`, Watchdog `critical`.
+- **Execution:** Bracket-Kinder werden über `get_order(order_id)` gelesen (statt in
+  offenen Orders zu suchen und 300 s zu warten), Notional statt Aktienanzahl aus
+  Preis×Prozent, `MIN_ORDER_NOTIONAL_USD`-Gate, Dry-Run-Fills mit Referenzpreis.
+- **Cost/Execution/Reports:** ein gemeinsames `fills.log`-Schema (`scripts/common/fills.py`,
+  Header + Archivierung), CEO liest das aktuelle Report-Schema.
+- **Backtest/Research:** Regelbasierter Review ohne LLM-Zwang, Veto-Floor beim Merge,
+  `_bar_span_h`-Korrektur (Bars statt Signale), Perps/Forex = 24/7-Marktphase,
+  Liquiditäts-Cap (5 %-Volumensregel), Wiedereinplanung verwaister Kandidaten.
+- **Robustheit:** Retry mit Backoff/`Retry-After` plus Circuit-Breaker je Broker
+  (`scripts/common/net.py`); Brokerfehler fliegen als Exception, nicht als
+  `{"error": ...}`-Payload durch die Gegend.
+- **Konfiguration:** `DATA_DIR`-Reparenting (Reports/Logs lagen eine Ebene zu hoch),
+  `SELFTEST_DIR`, `redacted()`-Dump, `.env`-Abgleich via `scripts/sync_env.py`.
+- **Gebühren:** einheitliches Schedule (`scripts/common/fees.py`) inkl. Perp-Funding,
+  Break-even ohne Hebel-Verzerrung, Mindest-Take-Profit als Risk-Gate.
+
+### Hinzugefügt
+- `docs/TROUBLESHOOTING.md` – Fehlersuche als Tabelle (Befund → Ursache → Fix → Prüfbefehl).
+- `scripts/sync_env.py` – ergänzt fehlende `.env`-Schlüssel aus `.env.example`
+  (überschreibt keine Werte; `--check` für CI).
+- `scripts/materialize_config.py` – schreibt `config/paperclip_agents.local.json`
+  (und auf Wunsch README/docs) mit dem tatsächlich existierenden Repo-Pfad.
+- `scripts/common/fills.py` – gemeinsames Fills-Schema inkl. Archivierung alter Zeilen.
+- Watchdog: Killswitch greift nur bei verbundenem Broker (sonst blockiert ein
+  unbearbeitetes Frisch-Setup jede Pipeline), `next_steps` im Report.
+- Test-Suite: 12 Dateien / 98 Tests, komplett offline (`python -m pytest`),
+  inklusive End-to-End-Selbsttest als subprocess (`-m integration`).
+- `requirements-dev.txt`, `pytest.ini`.
+
+### Geändert
+- `scripts/run_pipeline.py`: Eltern-Env wird an alle Agenten durchgereicht
+  (`ZHF_SYNTH`, `DRY_RUN`, `LOG_LEVEL`, `PYTHONPATH`), Lock-Freigabe im `finally`.
+- `synth_test`: `--keep`, Aufräumen nur selbst erzeugter Verzeichnisse,
+  `--seed-only` behält den State für Folgeläufe.
+
 ## [0.2.0] – FreeZen – 2026-09-28
 
 ### Hinzugefügt

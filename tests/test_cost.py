@@ -106,3 +106,26 @@ def test_corrupt_fills_line_is_skipped(isolated):
     assert cost.run() == 0
     rep = json.loads((cfg.REPORTS_DIR / "fee_report.json").read_text())
     assert rep["fees"]["trades"] == 0
+
+
+def test_append_fill_never_loses_the_timestamp(tmp_path):
+    """Zeile ohne timestamp wäre beim Lesen unsichtbar -> Trade 'verschwindet'."""
+    from scripts.common.fills import append_fill, read_fills
+    log = tmp_path / "fills.log"
+    append_fill({"broker": "synth", "symbol": "AAA", "side": "BUY", "qty": 2,
+                 "avg_price": 10.0, "status": "FILLED", "notional_usd": 20.0}, path=log)
+    rows = read_fills(path=log)
+    assert len(rows) == 1
+    assert rows[0]["timestamp"]
+    assert float(rows[0]["qty"]) == 2.0
+
+
+def test_old_schema_is_archived_not_misread(tmp_path):
+    from scripts.common.fills import append_fill, read_fills
+    log = tmp_path / "fills.log"
+    log.write_text("ts,sym,px\n123,AAA,99\n")           # uraltes Schema
+    append_fill({"broker": "synth", "symbol": "AAA", "side": "BUY", "qty": 1,
+                 "avg_price": 100.0, "status": "FILLED"}, path=log)
+    assert len(read_fills(path=log)) == 1
+    archives = list(tmp_path.glob("fills.*.old.log"))
+    assert archives, "altes Schema hätte archiviert werden müssen"

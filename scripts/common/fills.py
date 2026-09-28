@@ -46,15 +46,32 @@ def append_fill(row: dict[str, Any], path: Optional[Path] = None) -> Path:
                 needs_header = False
         except OSError as e:
             log.warning("fills.log konnte nicht geprüft werden: %s", e)
+    rec = dict(row)
+    # Zeitstempel NICHT optional: eine Zeile ohne timestamp wird beim Lesen
+    # verworfen und der Cost-Optimizer hält den Trade für nicht-existent.
+    if not rec.get("timestamp"):
+        rec["timestamp"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    missing = [k for k in ("broker", "symbol", "side") if not rec.get(k)]
+    if missing:
+        log.warning("fills.log: Zeile ohne %s geschrieben (%s)",
+                    ",".join(missing), rec.get("order_id", "?"))
     try:
         with p.open("a", newline="") as f:
             w = csv.DictWriter(f, fieldnames=FILL_COLUMNS, extrasaction="ignore")
             if needs_header:
                 w.writeheader()
-            w.writerow({k: row.get(k, "") for k in FILL_COLUMNS})
+            w.writerow({k: _fmt(rec.get(k, "")) for k in FILL_COLUMNS})
     except OSError as e:
         log.error("fills.log nicht schreibbar: %s", e)
     return p
+
+
+def _fmt(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.6f}".rstrip("0").rstrip(".")
+    return str(value)
 
 
 def read_fills(since: Optional[datetime] = None, until: Optional[datetime] = None,
@@ -63,11 +80,13 @@ def read_fills(since: Optional[datetime] = None, until: Optional[datetime] = Non
     if not p.exists():
         return []
     out: list[dict] = []
+    bad_ts = 0
     try:
         with p.open() as f:
             for row in csv.DictReader(f):
                 ts = _ts(row.get("timestamp"))
                 if ts is None:
+                    bad_ts += 1
                     continue
                 if since and ts < since:
                     continue
@@ -77,6 +96,9 @@ def read_fills(since: Optional[datetime] = None, until: Optional[datetime] = Non
                 out.append(row)
     except OSError as e:
         log.warning("fills.log nicht lesbar: %s", e)
+    if bad_ts:
+        log.warning("fills.log: %d Zeile(n) ohne gültigen Zeitstempel ignoriert – "
+                    "Schreiber muss 'timestamp' setzen", bad_ts)
     return out
 
 
@@ -89,8 +111,11 @@ def _ts(value: Any) -> Optional[datetime]:
 
 
 def last_fill(path: Optional[Path] = None) -> dict:
+    """Letzte Fill-Zeile – ohne internes `_ts`-Feld (für Reports/Ausgaben)."""
     rows = read_fills(path=path)
-    return rows[-1] if rows else {}
+    if not rows:
+        return {}
+    return {k: v for k, v in rows[-1].items() if not k.startswith("_")}
 
 
 def summarise(rows: Iterable[dict]) -> dict:

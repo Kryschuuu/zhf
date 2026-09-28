@@ -210,10 +210,17 @@ def run() -> int:
     _check_orders(rep)
 
     crit = rep.by_severity(CRITICAL)
-    if crit:
+    if crit and exchanges:
         SharedState.activate_killswitch("watchdog: " + "; ".join(i.msg for i in crit)[:200])
         log.error("Watchdog: %d KRITISCHE Befunde → Killswitch: %s", len(crit),
                   " | ".join(i.msg for i in crit)[:300])
+    elif crit:
+        # Kein Broker verbunden → der Killswitch schützt nichts, würde aber jeden
+        # weiteren Lauf blockieren (frische Setups landen sonst dauerhaft in "stop").
+        rep.add(f"{len(crit)} kritische Befunde, kein Broker verbunden – Killswitch NICHT ausgelöst",
+                WARN, "Keys/Netz klären; erst mit verbundenem Broker greift der Killswitch")
+        log.error("Watchdog: %d KRITISCHE Befunde (Killswitch aus – kein Broker aktiv): %s",
+                  len(crit), " | ".join(i.msg for i in crit)[:300])
     elif rep.issues:
         log.warning("Watchdog: %d Hinweise – %s", len(rep.issues),
                     "; ".join(f"[{i.severity}] {i.msg}" for i in rep.issues[:6]))
@@ -234,6 +241,9 @@ def run() -> int:
         "opencode_cli_ok": opencode_ok,
         "local_llm": local_llm_ok,
         "killswitch": SharedState.killswitch_active()[1],
+        "next_steps": ([
+            "Ursache beheben, dann: python -m scripts.monitoring.watchdog --reset-killswitch"
+        ] if SharedState.killswitch_active()[0] else []),
     }
     try:
         out = cfg.REPORTS_DIR / "watchdog.json"

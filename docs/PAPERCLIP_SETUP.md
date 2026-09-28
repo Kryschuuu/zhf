@@ -21,6 +21,12 @@ bash scripts/setup.sh
 Es schreibt einen Bericht nach `data/setup_report.json` und sagt dir genau, was
 noch fehlt. Die Python-Umgebung wird automatisch angelegt.
 
+> **Pfade:** Die Beispiele hier und `config/paperclip_agents.json` gehen von einem
+> Checkout unter `/home/user/zhf` aus. Liegt dein Repo woanders, einmal
+> `python -m scripts.materialize_config` laufen lassen – das schreibt
+> `config/paperclip_agents.local.json` (und mit `--inplace --docs` auch die
+> Beispielpfade in README/docs) mit deinem echten Pfad.
+
 ## 1. OpenCode CLI (wird von setup.sh geprüft)
 
 Wenn `scripts/setup.sh` OpenCode als fehlend meldet:

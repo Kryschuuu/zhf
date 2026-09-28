@@ -2,50 +2,138 @@
 
 Analysiert Gebühren, Slippage, Systemressourcen; schreibt fee_report.json
 mit Empfehlungen.
+
+Korrekturen:
+- Gebühren basieren jetzt auf der realen Fee-Schedule pro Broker/Markt
+  (`scripts/common.fees`) statt "Alpaca 0 %, sonst pauschal 0.1 %".
+- Slippage war hartkodiert 0.0 ("unbekannt ohne Referenz") – der Execution
+  Agent schreibt jetzt Referenzpreis und Ausführungspreis ins Fills-Log,
+  hier wird die echte Abweichung ausgewertet.
+- Kein LLM-Kommentar mehr, wenn gar keine Trades vorliegen (sonst halluziniert
+  das Modell Kostenprobleme, die es nicht gibt).
 """
 from __future__ import annotations
 
-import csv
 import json
 import sys
 import time
-from datetime import datetime, timezone, timedelta
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-import psutil
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+import psutil
+
 from scripts.common.config import cfg
 from scripts.common.logger import get_logger
-from scripts.common.state import SharedState, Heartbeat
-from scripts.common.llm import call_llm_json, LLMError
+from scripts.common.state import SharedState, Heartbeat, now_stamp
+from scripts.common.fees import breakeven_move_pct, expected_costs, fees
+from scripts.common.fills import read_fills
+from scripts.common.llm import call_llm, LLMError
 
 log = get_logger("cost")
 
+WINDOW_HOURS = 24
+FILLS_LOG = cfg.LOG_DIR / "fills.log"
 
-def _parse_fills_last_hour() -> list[dict]:
-    path = cfg.LOG_DIR / "fills.log"
-    if not path.exists():
-        return []
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=1)
-    fills = []
+
+def _parse_fills(since: datetime) -> list[dict]:
+    """Fills im Zeitfenster – Schema/Fallbacks in scripts.common.fills."""
+    return read_fills(since=since)
+
+
+def _f(row: dict, key: str, default: float = 0.0) -> float:
     try:
-        with path.open() as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                try:
-                    ts = datetime.fromisoformat(row["timestamp"])
-                    if ts.tzinfo is None:
-                        ts = ts.replace(tzinfo=timezone.utc)
-                    if ts >= cutoff:
-                        fills.append(row)
-                except Exception:
-                    continue
-    except Exception as e:
-        log.warning("Could not read fills log: %s", e)
-    return fills
+        v = row.get(key)
+        return float(v) if v not in (None, "", "nan") else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _aggregate(fills: list[dict]) -> dict:
+    by_broker: dict[str, dict] = defaultdict(lambda: {"trades": 0, "notional": 0.0,
+                                                      "fees": 0.0, "slippage_usd": 0.0,
+                                                      "slip_bps": []})
+    total_notional = 0.0
+    total_fees = 0.0
+    slips: list[float] = []
+    for r in fills:
+        broker = str(r.get("broker") or "unknown")
+        market = str(r.get("market") or ("crypto_perp" if "USDT" in str(r.get("symbol", "")) else "stocks"))
+        notional = _f(r, "notional_usd")
+        fee = _f(r, "est_fee_usd")
+        if not fee and notional:  # altes Fills-Format ohne est_fee_usd
+            fee = notional * fees(broker, market).round_trip_taker
+        taker = fees(broker, market).taker
+        slip_bps = _f(r, "slippage_bps")
+        entry = by_broker[broker]
+        entry["trades"] += 1
+        entry["notional"] += notional
+        entry["fees"] += fee
+        if notional and slip_bps:
+            entry["slippage_usd"] += abs(notional * slip_bps / 10_000)
+            entry["slip_bps"].append(slip_bps)
+            slips.append(slip_bps)
+        elif notional and not _f(r, "ref_price"):
+            # ohne Referenzpreis: mindestens der Spread, den wir zahlen mussten
+            entry["slippage_usd"] += notional * taker
+        total_notional += notional
+        total_fees += fee
+
+    out = {"trades": len(fills), "total_notional_usd": round(total_notional, 4),
+           "total_fees_usd": round(total_fees, 4),
+           "avg_fee_bps": round(total_fees / total_notional * 10_000, 2) if total_notional else 0.0,
+           "avg_slippage_bps": round(sum(slips) / len(slips), 2) if slips else 0.0,
+           "max_abs_slippage_bps": round(max((abs(s) for s in slips), default=0.0), 2),
+           "slippage_measured": len(slips),
+           "by_broker": {k: {"trades": v["trades"], "notional_usd": round(v["notional"], 2),
+                             "fees_usd": round(v["fees"], 4),
+                             "slippage_usd": round(v["slippage_usd"], 4),
+                             "avg_slip_bps": round(sum(v["slip_bps"]) / len(v["slip_bps"]), 2)
+                             if v["slip_bps"] else 0.0,
+                             "fee_pct_of_notional": round(v["fees"] / v["notional"] * 100, 4)
+                             if v["notional"] else 0.0}
+                         for k, v in by_broker.items()}}
+    out["total_cost_usd"] = round(total_fees + sum(v["slippage_usd"] for v in by_broker.values()), 4)
+    return out
+
+
+def _recommendations(costs: dict, resources: dict, fills: list[dict]) -> list[dict]:
+    recs: list[dict] = []
+    if resources["disk_pct"] > 80:
+        recs.append({"type": "warning", "severity": "high" if resources["disk_pct"] > 90 else "medium",
+                     "msg": f"Disk {resources['disk_pct']}% – alte Logs/Backtest-Results aufräumen"})
+    if resources["ram_pct"] > 85:
+        recs.append({"type": "warning", "severity": "high",
+                     "msg": f"RAM {resources['ram_pct']}% – kleinere Modelle / weniger parallele Agenten"})
+    n = costs["trades"]
+    if n == 0:
+        recs.append({"type": "info", "severity": "low",
+                     "msg": f"Keine Fills in den letzten {WINDOW_HOURS}h – Kostenrechnung ist "
+                            f"leer. Prüfe die Marktdaten (data/market_data/status.json)."})
+        return recs
+    if costs["avg_fee_bps"] > 10:
+        recs.append({"type": "warning", "severity": "medium",
+                     "msg": f"Ø Gebühren {costs['avg_fee_bps']} bps/Trade – Tradingfrequenz senken "
+                            f"oder Maker-Orders (Limit) nutzen"})
+    if costs["avg_slippage_bps"] > 15:
+        recs.append({"type": "warning", "severity": "medium",
+                     "msg": f"Ø Slippage {costs['avg_slippage_bps']} bps – zu grosse Orders oder "
+                            f"dünne Liquidität; in Liquiditätsfenstern handeln"})
+    for broker, c in costs["by_broker"].items():
+        if c["fee_pct_of_notional"] > 0.15:
+            recs.append({"type": "warning", "severity": "medium",
+                         "msg": f"{broker}: Gebühren {c['fee_pct_of_notional']}% des Notionals – "
+                                f"kleinere/entsprechend grössere Trades bündeln"})
+    used = {(str(r.get("broker")),
+             "crypto_perp" if "USDT" in str(r.get("symbol", "")) else
+             ("crypto" if "/" in str(r.get("symbol", "")) else "stocks")) for r in fills}
+    be = {f"{b}/{m}": breakeven_move_pct(b, m) for b, m in used if breakeven_move_pct(b, m) > 0}
+    recs.append({"type": "info", "severity": "low",
+                 "msg": "Break-even-Bewegung (Entry+Exit): "
+                        + ", ".join(f"{k} {v}%" for k, v in be.items() if v)})
+    return recs
 
 
 def run() -> int:
@@ -53,91 +141,77 @@ def run() -> int:
     log.info("=== Cost Optimizer start ===")
     hb = Heartbeat(agent="cost_optimizer", last_run="", status="running")
     try:
-        fills = _parse_fills_last_hour()
-
-        # Grobe Gebühren/Slippage-Schätzung
-        # (Für echte Werte müssten wir Broker-Fee-Endpoints abfragen – dies ist eine
-        #  Indikation basierend auf bekannten Fee-Schedules.)
-        fees_by_broker: dict[str, float] = {}
-        n = len(fills)
-        total_notional = 0.0
-        total_fees = 0.0
-        slippages: list[float] = []
-        for r in fills:
-            broker = r["broker"]
-            notional = float(r.get("notional_usd") or 0)
-            total_notional += notional
-            fee_rate = 0.0 if broker == "alpaca" else 0.001  # Alpaca Aktien kommissionsfrei
-            fee = notional * fee_rate
-            fees_by_broker[broker] = fees_by_broker.get(broker, 0) + fee
-            total_fees += fee
-            # Slippage ist unbekannt ohne Referenz; wir markieren N/A
-            slippages.append(0.0)
-
-        # System-Ressourcen
-        cpu = psutil.cpu_percent(interval=1)
-        ram = psutil.virtual_memory().percent
-        disk = psutil.disk_usage("/").percent
-
-        # Empfehlungen generieren (Regelbasiert + kleines LLM für Kommentare)
-        recs: list[dict] = []
-        if disk > 80:
-            recs.append({"type": "warning", "severity": "high", "msg": f"Disk usage {disk}%"})
-        if ram > 85:
-            recs.append({"type": "warning", "severity": "high",
-                         "msg": f"RAM usage {ram}% – reduce model size or stop parallel agents"})
-        if n > 0:
-            fee_pct = (total_fees / total_notional * 100) if total_notional > 0 else 0
-            if fee_pct > 0.15:
-                recs.append({"type": "warning", "severity": "medium",
-                             "msg": f"Fees last hour {fee_pct:.3f}% of notional – reduce trade frequency"})
-
-        # LLM-Kommentar (optional, nur wenn ein Modell verfügbar ist)
-        commentary = ""
+        since = datetime.now(timezone.utc) - timedelta(hours=WINDOW_HOURS)
+        fills = _parse_fills(since)
+        costs = _aggregate(fills)
         try:
-            from scripts.common.llm import call_llm
-            sys_prompt = "Du bist Betriebswirtschaftler. Gib 1-2 kurze, präzise Empfehlungen zur Kosteneffizienz auf Basis der unten stehenden Zahlen. Antworte als JSON: {\"commentary\": str, \"recommendations\": [str]}"
-            payload = {
-                "last_hour": {"trades": n, "total_fees_usd": round(total_fees, 2),
-                              "fees_by_broker": fees_by_broker, "notional_usd": round(total_notional, 2)},
-                "resources": {"cpu_pct": cpu, "ram_pct": ram, "disk_pct": disk},
-            }
-            resp = call_llm(json.dumps(payload), system_prompt=sys_prompt,
-                            agent="cost", temperature=0.2, max_tokens=800)
+            cpu = psutil.cpu_percent(interval=1)
+            ram = psutil.virtual_memory().percent
+            disk = psutil.disk_usage(str(cfg.DATA_DIR)).percent
+        except Exception as e:  # noqa: BLE001  (psutil schlägt in Containern auf)
+            log.debug("Ressourcenmessung fehlgeschlagen: %s", e)
+            cpu = ram = disk = -1.0
+        resources = {"cpu_pct": round(cpu, 1), "ram_pct": round(ram, 1), "disk_pct": round(disk, 1),
+                     "load_1m": round(psutil.getloadavg()[0], 2) if hasattr(psutil, "getloadavg") else None}
+        recs = _recommendations(costs, resources, fills)
+
+        md_status = SharedState.market_data_status()
+        if md_status and md_status.get("state") != "ok":
+            recs.append({"type": "warning", "severity": "high",
+                         "msg": f"Marktdaten-lückenhaft ({md_status.get('assets_ok')}/{md_status.get('assets')} "
+                                f"Assets ok) – ohne Daten keine Edge-Deckung der Fixkosten"})
+
+        commentary = ""
+        if costs["trades"] > 0:
             try:
-                d = json.loads(resp.text)
-                commentary = d.get("commentary", "")
-                for r in d.get("recommendations", []):
-                    recs.append({"type": "tip", "severity": "low", "msg": r})
-            except Exception:
-                commentary = resp.text[:300]
-        except LLMError as e:
-            log.info("LLM comment unavailable: %s", e)
+                sys_prompt = ("Du bist Betriebswirtschaftler eines quanten Trading-Teams. Gib 1-2 kurze, "
+                              "präzise Empfehlungen zur Kosteneffizienz auf Basis der Zahlen. Antworte als "
+                              "JSON: {\"commentary\": str, \"recommendations\": [str]}")
+                payload = {"window_hours": WINDOW_HOURS, "costs": costs, "resources": resources}
+                resp = call_llm(json.dumps(payload, default=str), system_prompt=sys_prompt,
+                                agent="cost", temperature=0.2, max_tokens=700)
+                try:
+                    d = json.loads(resp.text)
+                    commentary = str(d.get("commentary", ""))[:500]
+                    for r in d.get("recommendations", [])[:5]:
+                        recs.append({"type": "tip", "severity": "low", "msg": str(r)[:200]})
+                except (json.JSONDecodeError, TypeError):
+                    commentary = resp.text[:300]
+            except LLMError as e:
+                log.info("LLM comment unavailable: %s", str(e)[:150])
 
         report = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "last_hour": {
-                "trades": n,
-                "total_fees_usd": round(total_fees, 2),
-                "total_notional_usd": round(total_notional, 2),
-                "avg_fee_bps": round((total_fees / total_notional * 10000), 2) if total_notional > 0 else 0,
-                "fees_by_broker": {k: round(v, 2) for k, v in fees_by_broker.items()},
-            },
-            "system_resources": {"cpu_pct": cpu, "ram_pct": ram, "disk_pct": disk},
+            "window_hours": WINDOW_HOURS,
+            "mode": "dry_run" if cfg.DRY_RUN else ("synth" if cfg.SYNTH else "live"),
+            "fees": costs,
+            "fee_schedule": {b: {m: fees(b, m).as_dict() for m in
+                                 {"stocks", "crypto", "crypto_perp"}} for b in
+                             ("alpaca", "bingx", "bitunix")},
+            "system_resources": resources,
+            "market_data": {k: v for k, v in (md_status or {}).items() if k != "brokers"},
             "recommendations": recs,
             "commentary": commentary,
         }
-        (cfg.REPORTS_DIR / "fee_report.json").write_text(json.dumps(report, indent=2))
-        log.info("Cost report: fees=$%.2f (%d trades), RAM=%d%%, CPU=%d%%",
-                 total_fees, n, ram, cpu)
+        out = cfg.REPORTS_DIR / "fee_report.json"
+        try:
+            out.write_text(json.dumps(report, indent=2, default=str))
+        except OSError as e:
+            log.error("fee_report.json nicht schreibbar: %s", e)
+        log.info("Cost report: fees=$%.2f + slippage=$%.2f (%d trades/%dh), RAM=%s%%, CPU=%s%%",
+                 costs["total_fees_usd"], sum(v["slippage_usd"] for v in costs["by_broker"].values()),
+                 costs["trades"], WINDOW_HOURS, resources["ram_pct"], resources["cpu_pct"])
         hb.status = "ok"
-        hb.message = f"fees=${total_fees:.2f} trades={n} ram={ram}%"
+        hb.message = (f"fees=${costs['total_fees_usd']:.2f} trades={costs['trades']} "
+                      f"slip={costs['avg_slippage_bps']}bps ram={resources['ram_pct']}%")
+        hb.details = {"recommendations": len(recs), "window_hours": WINDOW_HOURS}
         return 0
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.exception("Cost optimizer failed: %s", e)
-        hb.status = "error"; hb.message = str(e)[:200]; return 1
+        hb.status, hb.message = "error", str(e)[:200]
+        return 1
     finally:
-        hb.last_run = time.strftime("%Y-%m-%dT%H:%M:%S")
+        hb.last_run = now_stamp()
         hb.duration_s = time.time() - t0
         hb.write()
 

@@ -28,3 +28,11 @@ data/reports/*.md
 .paperclip/
 node_modules/
 .DS_Store
+
+# Isolierte Test-/Synth-Zustände (dürfen nicht ins Repo)
+data/synth/
+data/**/equity_history.jsonl
+data/logs/pipeline.log*
+
+# Lokal materialisierte Konfiguration (Pfade je Maschine)
+config/paperclip_agents.local.json

@@ -7,6 +7,7 @@ Kennzahlen: Win-Rate, Profit-Faktor, Sharpe, Max-Drawdown, Expectancy.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from pathlib import Path
@@ -99,7 +100,7 @@ def run_backtest(df: pd.DataFrame, signal_mask: pd.Series, direction: pd.Series,
                     trades.append(-sl_pct - 2 * fee_pct)
                     break
                 if lows[j] <= tp:
-                    trades.append(sl_pct - 2 * fee_pct)  # bei SHORT umgekehrt
+                    trades.append(tp_pct - 2 * fee_pct)  # SHORT-Gewinn = TP-Abstand
                     break
             else:
                 trades.append((entry_price / closes[min(ei + 200, n - 1)] - 1) - 2 * fee_pct)
@@ -224,8 +225,10 @@ def validate_candidate(candidate: dict, bars, fee_pct: float = 0.001) -> Optiona
 
 
 def save_result(result: dict) -> None:
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    path = cfg.DATA_DIR / "backtest_results" / f"{result['symbol']}_{result['strategy']}_{ts}.json"
+    from datetime import timezone as _tz
+    ts = datetime.now(_tz.utc).strftime("%Y%m%dT%H%M%S")
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{result.get('symbol','NA')}_{result.get('strategy','NA')}")
+    path = cfg.DATA_DIR / "backtest_results" / f"{safe}_{ts}.json"
     with path.open("w") as f:
         json.dump(result, f, indent=2, default=str)
     log.info("Backtest saved: %s (passed=%s)", path.name, result.get("validation_passed"))

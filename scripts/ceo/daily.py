@@ -18,29 +18,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from scripts.common.config import cfg
 from scripts.common.logger import get_logger
 from scripts.common.llm import call_llm, LLMError
-from scripts.common.state import SharedState, Heartbeat
+from scripts.common.state import SharedState, Heartbeat, now_stamp
 from exchanges.factory import get_exchanges
 
 log = get_logger("ceo")
 
 
 def _today_fills() -> list[dict]:
-    path = cfg.LOG_DIR / "fills.log"
-    if not path.exists():
-        return []
+    """Fills des laufenden Tages (UTC) – via gemeinsames Schema in common.fills."""
+    from scripts.common.fills import read_fills
     now = datetime.now(timezone.utc)
-    today = now.date()
-    out = []
-    with path.open() as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                ts = datetime.fromisoformat(row["timestamp"])
-                if ts.date() == today:
-                    out.append(row)
-            except Exception:
-                continue
-    return out
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return read_fills(since=midnight)
 
 
 def _week_performance() -> dict:
@@ -83,11 +72,9 @@ def _agent_health() -> list[dict]:
         if not hb.last_run:
             out.append({"agent": name, "status": "never_run", "age_min": None})
             continue
-        try:
-            ts = time.mktime(time.strptime(hb.last_run, "%Y-%m-%dT%H:%M:%S"))
-            age_min = int((now - ts) / 60)
-        except Exception:
-            age_min = -1
+        from scripts.common.state import parse_stamp
+        ts = parse_stamp(hb.last_run)
+        age_min = -1 if ts is None else int((now - ts) / 60)
         out.append({"agent": name, "status": hb.status, "age_min": age_min, "last_msg": hb.message})
     return out
 
@@ -141,7 +128,12 @@ def run() -> int:
             "fills_today_detail": fills_today[-20:],
             "week_performance": week,
             "fee_report_summary": {
-                "last_hour_fees_usd": fee_report.get("last_hour", {}).get("total_fees_usd"),
+                # Cost-Optimizer schreibt "fees" (24h-Fenster); "last_hour" ist das
+                # alte Format – beides akzeptieren, sonst steht im Bericht "None".
+                "fees_usd": (fee_report.get("fees") or {}).get("total_fees_usd",
+                              (fee_report.get("last_hour") or {}).get("total_fees_usd")),
+                "trades": (fee_report.get("fees") or {}).get("trades"),
+                "avg_slippage_bps": (fee_report.get("fees") or {}).get("avg_slippage_bps"),
                 "recommendations": fee_report.get("recommendations", []),
                 "resources": fee_report.get("system_resources", {}),
             },
@@ -150,7 +142,7 @@ def run() -> int:
             "strategy_weights": _load_strategy_weights(),
         }
 
-        sys_prompt_path = Path(cfg.STRATEGIES_DIR).parent / "prompts" / "ceo.md"
+        sys_prompt_path = Path(cfg.PROMPTS_DIR) / "ceo.md"
         sys_prompt = sys_prompt_path.read_text()
         user_prompt = (
             "Es ist Ende des Handelstages. Erstelle den Tagesbericht gemäss deiner "
@@ -186,7 +178,7 @@ def run() -> int:
         log.exception("CEO daily failed: %s", e)
         hb.status = "error"; hb.message = str(e)[:200]; return 1
     finally:
-        hb.last_run = time.strftime("%Y-%m-%dT%H:%M:%S")
+        hb.last_run = now_stamp()
         hb.duration_s = time.time() - t0
         hb.write()
 
@@ -215,24 +207,36 @@ def _fallback_report(d: dict) -> str:
     return "\n".join(lines)
 
 
-def _auto_adjust_weights(fills: list[dict]) -> None:
-    """Einfache Heuristik: pausiere Strategien die heute >2 Trades mit FEHLER hatten."""
-    p = cfg.STRATEGIES_DIR / "strategy_weights.json"
+def _auto_adjust_weights(fills: list[dict]) -> dict:
+    """Heuristik: Strategie abwerten, wenn >2 Trades davon Fehler/Rejections hatten.
+
+    Bewusst eine klare Regel und kein LLM – der Gewichts-Vorschlag des LLM ist nur
+    informativ (siehe prompts/ceo.md), damit eine Halluzination nicht die Strategie-
+    Gewichte im Live-Pfad verbiegt.
+    """
     weights = _load_strategy_weights()
-    # Zurücksetzen auf Default wenn keine Daten
     if not fills:
-        return
-    p.write_text(json.dumps(weights, indent=2))
-
-
-def _load_strategy_weights() -> dict:
-    p = cfg.STRATEGIES_DIR / "strategy_weights.json"
-    if p.exists():
+        return weights
+    bad: dict[str, int] = {}
+    for f in fills:
+        status = str(f.get("status", "")).upper()
+        if status in ("REJECTED", "CANCELED") or f.get("error"):
+            strat = str(f.get("strategy") or "unknown")
+            bad[strat] = bad.get(strat, 0) + 1
+    changed = False
+    for strat, count in bad.items():
+        if count > 2 and strat in weights and weights[strat] > 0.2:
+            weights[strat] = round(max(0.2, weights[strat] * 0.8), 3)
+            changed = True
+            log.warning("CEO: Strategie '%s' abgewertet auf %.3f (%d Fehler heute)",
+                        strat, weights[strat], count)
+    if changed:
+        p = cfg.STRATEGIES_DIR / "strategy_weights.json"
         try:
-            return json.loads(p.read_text())
-        except Exception:
-            pass
-    return {"mean_reversion": 1.0, "breakout": 1.0, "ema_crossover": 1.0, "macd_flip": 0.8}
+            p.write_text(json.dumps(weights, indent=2))
+        except OSError as e:
+            log.error("strategy_weights.json nicht schreibbar: %s", e)
+    return weights
 
 
 if __name__ == "__main__":

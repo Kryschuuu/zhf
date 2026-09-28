@@ -42,6 +42,8 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     if len(df) < 30:
         return df
+    if "rsi14" in df.columns and "ema21" in df.columns and "atr14" in df.columns:
+        return df  # bereits berechnet (Research -> generate_signals nicht doppelt)
     df["rsi14"] = ta.momentum.RSIIndicator(df["close"], window=14).rsi()
     df["rsi7"] = ta.momentum.RSIIndicator(df["close"], window=7).rsi()
     macd = ta.trend.MACD(df["close"])

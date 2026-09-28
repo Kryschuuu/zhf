@@ -111,7 +111,7 @@ python -m scripts.monitoring.synth_test   # Testdaten
 python -m scripts.monitoring.watchdog     # Health-Check
 ```
 
-### 6. Paperclip installieren
+### 5. Paperclip installieren
 ```bash
 npx paperclipai onboard --yes
 ```
@@ -119,12 +119,20 @@ Dann gemäss `docs/PAPERCLIP_SETUP.md` die 6 Agenten + Watchdog im Dashboard
 anlegen. Die Agent-Konfigurationen in `config/paperclip_agents.json` dienen
 als Vorlage.
 
-### 7. Pipeline laufen lassen
+### 6. Pipeline laufen lassen
 Sobald Alpaca-Paper-Keys gesetzt sind:
 ```bash
 python -m scripts.run_pipeline
 ```
 Die Heartbeats werden danach automatisch von Paperclip getriggert.
+
+### 7. Tests und Konfig-Abgleich
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest              # 100 Tests, komplett offline (keine Broker-Requests)
+python -m scripts.sync_env    # fehlende .env-Schlüssel aus .env.example ergänzen
+python -m scripts.materialize_config   # Paperclip-Config auf den echten Repo-Pfad setzen
+```
 
 ## Die 6 Agenten im Überblick
 
@@ -166,12 +174,32 @@ min 15 Trades, Winrate ≥ 45%, PF ≥ 1.3, Sharpe ≥ 1.0, Max-DD ≤ 15%.
 | **Phase 2** | Woche 3-6 | Alpaca Live ($100) + BingX Spot ($50) | ~150 € | Kleinstkapital, echte Gebühren/Slippage messen |
 | **Phase 3** | ab Monat 2 | Alle 3 Broker live | schrittweise | Skalierung NUR bei 60-Tage-Sharpe > 1.5 & DD < 8% |
 
+## Fehlersuche
+
+Kurzreferenz – ausführlich in **[`docs/TROUBLESHOOTING.md`](docs/TROUBLESHOOTING.md)**
+(Befund → Ursache → Fix → Prüfbefehl).
+
+| Befund im Log | Ursache | Fix |
+|---|---|---|
+| `subscription does not permit querying recent SIP data` | Free-Plan darf kein SIP für Daten < 15 min | `ALPACA_DATA_FEED=iex` (Default `auto` = iex), Uhrzeit prüfen |
+| DNS-Fehler auf `fapi-sim.bitunix.com` | Bitunix hat **kein** Futures-REST-Testnet | `BITUNIX_BASE_URL=https://fapi.bitunix.com`; `BITUNIX_TESTNET=true` ⇒ read-only, Live-Orders nur mit `BITUNIX_ALLOW_LIVE_ORDERS=true` |
+| `SYNTH_* … invalid symbol` bei Alpaca | alter Selbsttest schrieb Testdaten in `data/signals` | Selbsttest läuft isoliert in `data/synth` (`ZHF_DATA_DIR`) |
+| Risk `0/3 approved`, „no data“ | Datenlage und „keine Chance“ waren nicht unterscheidbar | `data/market_data/status.json` (ok/empty/error/stale), Watchdog meldet `critical` |
+| Orders hängen 300 s / Fill-Preis 0 | Bracket-Beine wurden in offenen Orders gesucht | `get_order(order_id)`, Dry-Run-Fill mit Referenzpreis |
+| Limit-Order unter Kosten | Take-Profit < Round-Trip-Fee | `scripts/common/fees.py` + Risk-Gate `min_sane_take_profit_pct` |
+
+Wo nachsehen: `data/reports/watchdog.json`, `data/market_data/status.json`,
+`data/signals/rejections.json`, `data/orders/recent_errors.json`, `data/logs/fills.log`.
+Killswitch zurücksetzen: `python -m scripts.monitoring.watchdog --reset-killswitch`.
+
 ## Monitoring
 
 - **Paperclip Dashboard:** http://localhost:3100
 - **Täglicher CEO-Bericht:** `data/reports/daily_report.md`
 - **System-Checks:** `data/reports/watchdog.json` (alle 10 Min)
 - **Logs:** `data/logs/*.log` (autorotierend)
+- **Fills/Gebühren:** `data/logs/fills.log`, `data/reports/fee_report.json`
+- **Broker-Gesundheit:** `python -m scripts.monitoring.watchdog` → Breaker, Cooldowns
 
 ## Wichtige Hinweise
 
@@ -190,6 +218,7 @@ min 15 Trades, Winrate ≥ 45%, PF ≥ 1.3, Sharpe ≥ 1.0, Max-DD ≤ 15%.
 - **`docs/ARCHITECTURE.md`** – Detaillierte Architektur, Harness-Wahl, Modell-Begründung
 - **`docs/PAPERCLIP_SETUP.md`** – Setup-Anleitung (OpenCode → Paperclip → Agenten)
 - **`docs/AGENT_SKILLS_MATRIX.md`** – Input/Output/Interaktion je Agent
+- **`docs/TROUBLESHOOTING.md`** – Fehlersuche: Befund → Ursache → Fix → Prüfbefehl
 - **`docs/CEO_TASKS.md`** – P0–P4 Aufgabenkatalog für den CEO
 - **`docs/SKILLS.md`** – Skills-Überblick
 

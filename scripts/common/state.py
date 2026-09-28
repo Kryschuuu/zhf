@@ -10,7 +10,7 @@ import json
 import os
 import tempfile
 import time
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,6 +19,28 @@ from .config import cfg
 from .logger import get_logger
 
 log = get_logger("state")
+
+
+def now_stamp() -> str:
+    """Heartbeat-Zeitstempel inkl. Offset – avoids lokale/UTC-Mischrechnung."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def parse_stamp(value: str | None) -> float | None:
+    """Heartbeat-/Log-Zeitstempel → Unix-Sekunden. Toleriert alte naive Formate."""
+    if not value:
+        return None
+    txt = str(value).strip().replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(txt)
+    except ValueError:
+        try:                        # Altformat: "%Y-%m-%dT%H:%M:%S" ohne Zone ( lokale Zeit )
+            dt = datetime.strptime(txt[:19], "%Y-%m-%dT%H:%M:%S").astimezone()
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.astimezone()
+    return dt.timestamp()
 
 
 def _atomic_write(path: Path, data: Any) -> None:
@@ -51,18 +73,23 @@ class Heartbeat:
     status: str  # ok | error | idle
     message: str = ""
     duration_s: float = 0.0
+    details: dict = field(default_factory=dict)  # strukturierte Diagnose (Watchdog/CEO)
 
     def write(self) -> None:
         p = cfg.DATA_DIR / "heartbeats" / f"{self.agent}.json"
-        _atomic_write(p, asdict(self))
+        try:
+            _atomic_write(p, asdict(self))
+        except OSError as e:  # Dateisystem-Fehler darf den Agent nicht killen
+            log.error("Heartbeat %s konnte nicht geschrieben werden: %s", self.agent, e)
 
     @classmethod
     def read(cls, agent: str) -> "Heartbeat":
         p = cfg.DATA_DIR / "heartbeats" / f"{agent}.json"
         d = _read_json(p, None)
-        if d is None:
+        if not isinstance(d, dict):
             return cls(agent=agent, last_run="", status="never_run", message="no heartbeat yet")
-        return cls(**d)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +113,29 @@ class SharedState:
     PORTFOLIO = cfg.DATA_DIR / "portfolio.json"
     # System health flag – Execution prüft dies vor jedem Order
     KILLSWITCH = cfg.DATA_DIR / "killswitch.json"
+    # Marktdaten-Diagnose (Research schreibt, Watchdog liest)
+    MARKET_DATA_STATUS = cfg.DATA_DIR / "market_data" / "status.json"
+    # Vom Risk-Agent abgelehnte Kandidaten (Debug/CEO-Report)
+    RISK_REJECTIONS = cfg.DATA_DIR / "signals" / "rejections.json"
+
+    @classmethod
+    def set_market_data_status(cls, status: dict) -> None:
+        _atomic_write(cls.MARKET_DATA_STATUS, {
+            "updated_at": datetime.now(timezone.utc).isoformat(), **status})
+
+    @classmethod
+    def market_data_status(cls) -> dict:
+        return _read_json(cls.MARKET_DATA_STATUS, {})
+
+    @classmethod
+    def risk_rejections(cls) -> list[dict]:
+        d = _read_json(cls.RISK_REJECTIONS, {"rejections": []})
+        return list(d.get("rejections") or []) if isinstance(d, dict) else list(d or [])
+
+    @classmethod
+    def set_risk_rejections(cls, rejections: list[dict]) -> None:
+        _atomic_write(cls.RISK_REJECTIONS, {
+            "rejected_at": datetime.now(timezone.utc).isoformat(), "rejections": rejections})
 
     @classmethod
     def killswitch_active(cls) -> tuple[bool, str]:
@@ -108,7 +158,11 @@ class SharedState:
 
     @classmethod
     def candidates(cls) -> list[dict]:
-        return _read_json(cls.CANDIDATES, [])
+        """Immer eine Liste – egal ob candidates.json als Liste oder {…} geschrieben wurde."""
+        raw = _read_json(cls.CANDIDATES, [])
+        if isinstance(raw, dict):
+            return list(raw.get("candidates") or [])
+        return list(raw or [])
 
     @classmethod
     def set_candidates(cls, cands: list[dict]) -> None:

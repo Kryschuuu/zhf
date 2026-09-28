@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
@@ -56,12 +56,14 @@ class Order:
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     leverage: int = 1
+    market: str = ""                        # stocks | crypto | crypto_perp | forex
+    entry_reference_price: Optional[float] = None  # Kurs bei Freigabe (Slippage-Messung)
     client_order_id: Optional[str] = None
     broker_order_id: Optional[str] = None
     status: OrderStatus = OrderStatus.NEW
     filled_qty: float = 0.0
     avg_fill_price: float = 0.0
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     error: Optional[str] = None
 
 
@@ -101,3 +103,22 @@ class Exchange(ABC):
 
     @abstractmethod
     def is_market_open(self, symbol: str) -> bool: ...
+
+
+    # ---------------------------------------------------------------- optional
+    def is_tradable(self, symbol: str) -> bool:
+        """Kann dieser Broker das Symbol handeln? Default: ja (nur Syntax-Check).
+
+        Risk/Execution pruefen das VOR jedem Order-/Data-Call, damit Platzhalter
+        (SYNTH_*), Tippfehler oder Symbole des falschen Brokers nicht als
+        Netzwerkfehler im Log landen.
+        """
+        return True
+
+    def set_leverage(self, symbol: str, leverage: int) -> bool:
+        """Nur von Perps-Brokern implementiert. Default: nicht unterstuetzt."""
+        return False
+
+    def status(self) -> dict:
+        """Diagnose fuer Watchdog/CEO-Report (Feed-Status, Circuit-Breaker, …)."""
+        return {}

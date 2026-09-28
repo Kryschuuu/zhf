@@ -8,15 +8,18 @@ from __future__ import annotations
 import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.common.config import cfg
 from scripts.common.logger import get_logger
-from scripts.common.state import SharedState, Heartbeat
+from scripts.common.state import SharedState, Heartbeat, now_stamp
 from exchanges.factory import get_exchanges
 from scripts.backtest.engine import validate_candidate, save_result
+from scripts.common.fees import taker_fee
+from exchanges.symbols import is_valid_symbol_for_broker, normalize_symbol
 
 log = get_logger("backtest")
 
@@ -32,8 +35,7 @@ def run() -> int:
             hb.write()
             return 0
 
-        raw = SharedState.candidates()
-        cands = raw.get("candidates", []) if isinstance(raw, dict) else raw
+        cands = SharedState.candidates()
         if not cands:
             log.info("No candidates to validate.")
             SharedState.set_validated([])
@@ -46,8 +48,14 @@ def run() -> int:
         validated = []
         rejected = []
         for c in cands:
-            sym = c.get("symbol"); broker = c.get("broker", "alpaca")
+            broker = str(c.get("broker", "alpaca")).lower()
+            sym = normalize_symbol(str(c.get("symbol", "")), broker)
+            market = str(c.get("market") or ("crypto_perp" if "USDT" in sym else "stocks"))
             tf = c.get("timeframe", "1h")
+            c = {**c, "symbol": sym, "broker": broker, "market": market}
+            if not is_valid_symbol_for_broker(sym, market, broker):
+                rejected.append({**c, "reason": f"invalid symbol '{sym}'"})
+                continue
             ex = exchanges.get(broker)
             if not ex:
                 rejected.append({**c, "reason": f"broker {broker} not available"})
@@ -60,7 +68,10 @@ def run() -> int:
             if len(bars) < 50:
                 rejected.append({**c, "reason": f"only {len(bars)} bars"})
                 continue
-            fee = 0.0 if broker == "alpaca" and c.get("market") == "stocks" else 0.001
+            # Realistische Taker-Gebühr pro Seite statt Pauschale (Alpaca Krypto
+            # z.B. 0.25 %, BingX-Perp 0.05 %) – sonst werden Cost-Edge-Kandidaten
+            # durch falsche Fees verwässert.
+            fee = taker_fee(broker, market)
             res = validate_candidate(c, bars, fee_pct=fee)
             if not res:
                 rejected.append({**c, "reason": "unknown strategy or insufficient data"})
@@ -80,6 +91,7 @@ def run() -> int:
                     "backtest": bt,
                     "position_size_pct_hint": round(size_pct, 2),
                     "review": res["backtest"].get("reason", "passed"),
+            "validated_at": datetime.now(timezone.utc).isoformat(),
                 })
             else:
                 rejected.append({**c, "reason": res["backtest"].get("reason", "failed thresholds")})
@@ -117,7 +129,7 @@ def run() -> int:
         hb.message = str(e)[:200]
         return 1
     finally:
-        hb.last_run = time.strftime("%Y-%m-%dT%H:%M:%S")
+        hb.last_run = now_stamp()
         hb.duration_s = time.time() - t0
         hb.write()
 

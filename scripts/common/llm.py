@@ -225,6 +225,8 @@ def call_llm(prompt: str, system_prompt: Optional[str] = None,
              temperature: float = 0.3, max_tokens: int = 4096,
              max_retries: int = 2) -> LLMResponse:
     """Primär: OpenCode Zen Free. Fallback: lokaler Server (LM Studio/Ollama)."""
+    if getattr(cfg, "SKIP_LLM", False):
+        raise LLMError("LLM disabled (ZHF_SKIP_LLM=1) – deterministische Regel-Pipeline")
     try:
         return call_llm_opencode(prompt, system_prompt=system_prompt, agent=agent,
                                  max_tokens=max_tokens, temperature=temperature)

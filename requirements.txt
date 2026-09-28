@@ -1,5 +1,5 @@
-alpaca-py>=0.24
-ccxt>=4.0
+alpaca-py>=0.32   # Feed-Parameter pro Request (IEX für den Free-Plan)
+ccxt>=4.3     # set_sandbox_mode() für BingX-Testnet
 pandas>=2.0
 numpy>=1.26
 python-dotenv>=1.0

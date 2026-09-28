@@ -1,11 +1,23 @@
-"""Execution Agent – läuft jeden Minute während Marktzeiten.
+"""Execution Agent – läuft jede Minute während Marktzeiten.
 
 Liest approved.json, platziert Orders, aktualisiert State, überwacht Positionen.
 Rein deterministische Python-Logik – KEIN LLM (Halluzinationsgefahr zu gross).
+
+Korrekturen:
+- DRY_RUN-Fills hatten `avg_fill_price = 0` → `notional_usd = 0` im Fills-Log →
+  Cost-Optimizer und Slippage-Messung blind. Jetzt Fill zum Referenzpreis.
+- Slippage wird gemessen (Referenzpreis aus Risk vs. Ausführungspreis).
+- `recent_errors` benutzte `time.mktime(strptime(...))` (lokale Zeit) für das
+  5-Minuten-Fenster → auf einer CET-Maschine tickte die Killswitch-Logik zwei
+  Stunden falsch. Jetzt echte UTC-Timestamps.
+- Nicht verarbeitbare Trades (Broker offline / read-only / Markt zu) wurden
+  kommentarlos verworfen, weil approved.json am Zyklusende geleert wurde.
+  Jetzt bis zu 3 Retries, danach dokumentierter Drop + Grund im Log.
+- Gebühren/Slippage landen im Fills-Log, damit der Cost-Optimizer mit echten
+  Zahlen rechnet statt mit 0.
 """
 from __future__ import annotations
 
-import csv
 import json
 import sys
 import time
@@ -17,54 +29,160 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.common.config import cfg
 from scripts.common.logger import get_logger
-from scripts.common.state import SharedState, Heartbeat
+from scripts.common.state import SharedState, Heartbeat, now_stamp
+from scripts.common.fees import expected_costs
+from scripts.common.fills import append_fill
 from exchanges.factory import get_exchanges
 from exchanges.base import Side, Order, OrderType, OrderStatus
 
 log = get_logger("execution")
 
-FILLS_LOG = cfg.LOG_DIR / "fills.log"
+FILLS_LOG = cfg.LOG_DIR / "fills.log"      # Kompatibilität für Tests/Watchdog
 ERROR_TRACK = cfg.DATA_DIR / "orders" / "recent_errors.json"
+FILL_COLUMNS = None                        # deprecated: Schema liegt in scripts.common.fills
+MAX_ORDER_ATTEMPTS = 3
+ERROR_WINDOW_S = 300
 
 
-def _log_fill(order: Order) -> None:
-    FILLS_LOG.parent.mkdir(parents=True, exist_ok=True)
-    new = not FILLS_LOG.exists()
-    with FILLS_LOG.open("a", newline="") as f:
-        w = csv.writer(f)
-        if new:
-            w.writerow(["timestamp", "broker", "symbol", "side", "qty", "avg_price",
-                        "order_id", "status", "strategy", "notional_usd"])
-        w.writerow([
-            datetime.now(timezone.utc).isoformat(), order.broker, order.symbol,
-            order.side.value, order.filled_qty or order.qty, order.avg_fill_price,
-            order.broker_order_id, order.status.value,
-            getattr(order, "strategy", ""), round((order.filled_qty or order.qty) * (order.avg_fill_price or 0), 2)
-        ])
+# --------------------------------------------------------------------- logging
+def _ref_price(trade: dict, order: Order) -> float:
+    for key in ("entry_reference_price", "data_last_close", "limit_price"):
+        v = trade.get(key)
+        try:
+            if v and float(v) > 0:
+                return float(v)
+        except (TypeError, ValueError):
+            continue
+    return float(order.limit_price or 0.0)
+
+
+def _log_fill(order: Order, trade: dict | None = None) -> dict:
+    """Ein Fill als CSV-Zeile; gibt die berechneten Kosten zurück (fürs State)."""
+    trade = trade or {}
+    qty = float(order.filled_qty or order.qty or 0)
+    price = float(order.avg_fill_price or 0)
+    ref = _ref_price(trade, order)
+    notional = round(qty * price, 4)
+    slip_bps = round((price - ref) / ref * 10_000, 2) if ref > 0 and price > 0 else ""
+    costs = expected_costs(notional, order.broker, order.market or trade.get("market", ""))
+    append_fill({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "broker": order.broker, "symbol": order.symbol, "side": order.side.value,
+        "qty": qty, "avg_price": price, "order_id": order.broker_order_id or "",
+        "status": order.status.value, "strategy": trade.get("strategy", ""),
+        "notional_usd": notional, "ref_price": round(ref, 6) if ref else "",
+        "slippage_bps": slip_bps, "est_fee_usd": costs["commission_usd"],
+        "mode": "dry_run" if cfg.DRY_RUN else ("synth" if order.broker == "synth" else "live"),
+    })
+    return {"notional_usd": notional, "slippage_bps": slip_bps,
+            "est_fee_usd": costs["commission_usd"], "ref_price": round(ref, 6) if ref else None}
 
 
 def _track_error(msg: str) -> None:
-    p = ERROR_TRACK
+    """Fehlerprotokoll; >=3 in ERROR_WINDOW_S → Killswitch (Broker-/Order-Sturm)."""
+    now = datetime.now(timezone.utc)
+    entry = {"ts": now.isoformat(), "msg": str(msg)[:300]}
+    existing: list[dict] = []
     try:
+        if ERROR_TRACK.exists():
+            loaded = json.loads(ERROR_TRACK.read_text() or "[]")
+            if isinstance(loaded, list):
+                existing = loaded[-20:]
+    except (json.JSONDecodeError, OSError):
         existing = []
-        if p.exists():
-            existing = json.loads(p.read_text())
-        existing = existing[-20:]
-        existing.append({"ts": datetime.now(timezone.utc).isoformat(), "msg": msg})
-        p.write_text(json.dumps(existing, indent=2))
-        if len(existing) >= 3:
-            # Wenn 3 Fehler in den letzten 5 Minuten → Killswitch
-            cutoff = time.time() - 300
-            recent = [e for e in existing if time.mktime(time.strptime(e["ts"][:19], "%Y-%m-%dT%H:%M:%S")) > cutoff]
-            if len(recent) >= 3:
-                SharedState.activate_killswitch(f"3 execution errors in 5 min: {msg[:100]}")
-    except Exception:
-        pass
+    existing.append(entry)
+    existing = existing[-40:]
+    try:
+        ERROR_TRACK.parent.mkdir(parents=True, exist_ok=True)
+        ERROR_TRACK.write_text(json.dumps(existing, indent=2))
+    except OSError as e:
+        log.warning("recent_errors.json nicht schreibbar: %s", e)
+    recent = 0
+    for e in existing:
+        try:
+            ts = datetime.fromisoformat(str(e.get("ts", "")).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if (now - ts).total_seconds() <= ERROR_WINDOW_S:
+                recent += 1
+        except ValueError:
+            continue
+    if recent >= 3:
+        SharedState.activate_killswitch(
+            f"{recent} execution errors in {ERROR_WINDOW_S // 60} min: {msg[:100]}")
 
 
 def _client_order_id(symbol: str) -> str:
-    short = "".join(ch for ch in symbol if ch.isalnum())[:10]
-    return f"zhf-{int(time.time())}-{short}-{uuid.uuid4().hex[:6]}"
+    short = "".join(ch for ch in symbol if ch.isalnum())[:10] or "sym"
+    return f"zhf-{int(time.time())}-{short}-{uuid.uuid4().hex[:6]}"[:64]
+
+
+def _trade_to_order(trade: dict, broker: str, coid: str) -> Order:
+    def _f(key: str) -> float | None:
+        v = trade.get(key)
+        try:
+            return float(v) if v not in (None, "", 0) else None
+        except (TypeError, ValueError):
+            return None
+    return Order(
+        broker=broker,
+        symbol=trade["symbol"],
+        side=Side.BUY if str(trade.get("direction", "LONG")).upper() == "LONG" else Side.SELL,
+        qty=float(trade.get("qty") or 0),
+        type=OrderType.MARKET if str(trade.get("order_type", "MARKET")).upper() == "MARKET" else OrderType.LIMIT,
+        limit_price=_f("limit_price"),
+        stop_loss=_f("stop_loss"),
+        take_profit=_f("take_profit"),
+        leverage=int(trade.get("leverage") or 1),
+        market=str(trade.get("market") or ""),
+        entry_reference_price=_f("entry_reference_price"),
+        client_order_id=coid,
+    )
+
+
+def _order_to_dict(o: Order, trade: dict, coid: str, cost: dict | None = None) -> dict:
+    return {
+        "broker": o.broker, "symbol": o.symbol, "side": o.side.value, "qty": o.qty,
+        "type": o.type.value, "status": o.status.value,
+        "broker_order_id": o.broker_order_id, "client_order_id": coid,
+        "stop_loss": o.stop_loss, "take_profit": o.take_profit, "leverage": o.leverage,
+        "market": o.market, "strategy": trade.get("strategy"),
+        "direction": trade.get("direction"),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "error": o.error, "avg_fill_price": o.avg_fill_price, "filled_qty": o.filled_qty,
+        "entry_reference_price": o.entry_reference_price,
+        "notional_usd": trade.get("notional_usd"), "cost": cost or {},
+    }
+
+
+def _reconcile_positions(exchanges: dict, positions: list[dict]) -> list[str]:
+    """Notiert offene Positionen gegen ihre SL/TP – Exit-Signale für den nächsten Zyklus.
+
+    Der Broker übernimmt bei Alpaca (OTO) und Bitunix (slPrice/tpPrice) die
+    Absicherung; für den Fall, dass ein Broker keine Attached-Orders unterstützt,
+    erkennt der Bot hier mindestens den SL-Bruch und meldet ihn laut.
+    """
+    alerts: list[str] = []
+    for pos in positions:
+        sym = pos.get("symbol")
+        ex = exchanges.get(pos.get("broker"))
+        if not ex or not sym:
+            continue
+        try:
+            bars = ex.get_bars(sym, "1h", limit=3)
+        except Exception:  # noqa: BLE001
+            continue
+        if not bars:
+            continue
+        price = float(bars[-1].close)
+        entry = float(pos.get("avg_entry") or 0)
+        qty = float(pos.get("qty") or 0)
+        if entry <= 0 or qty == 0:
+            continue
+        pnl_pct = (price / entry - 1) * 100 * (1 if qty > 0 else -1)
+        if pnl_pct <= -cfg.DEFAULT_STOP_LOSS_PCT * 3:
+            alerts.append(f"{sym}@{pos.get('broker')}: {pnl_pct:.2f}% unter SL-Nähe – Exit prüfen")
+    return alerts
 
 
 def run() -> int:
@@ -74,145 +192,188 @@ def run() -> int:
     try:
         killsw, reason = SharedState.killswitch_active()
         if killsw:
-            hb.status = "idle"
-            hb.message = f"killswitch: {reason}"
-            hb.write(); return 0
+            log.warning("Killswitch aktiv – keine Orders. Grund: %s", reason)
+            hb.status, hb.message = "idle", f"killswitch: {reason}"
+            return 0
 
         exchanges = get_exchanges()
         if not exchanges:
             if cfg.DRY_RUN or cfg.ENVIRONMENT == "paper":
-                log.info("No exchanges configured – idle during setup.")
-                hb.status = "idle"; hb.message = "waiting for exchange API keys (setup)"
-                hb.write(); return 0
+                log.info("Keine Broker verbunden – Execution im Leerlauf (Setup-Phase).")
+                hb.status, hb.message = "idle", "waiting for exchange API keys (setup)"
+                return 0
             _track_error("no exchanges available")
-            hb.status = "error"; hb.message = "no exchanges"
-            hb.write(); return 1
+            hb.status, hb.message = "error", "no exchanges"
+            return 1
 
-        # Aktuellen State lesen
         state = SharedState.order_state()
-        open_orders = state.get("orders", [])
-        fills = state.get("fills", [])
+        open_orders = list(state.get("orders", []))
+        fills = list(state.get("fills", []))
 
-        # Status-Updates für bereits platzierte Orders (Poll)
-        remaining_open = []
+        # 1) Status-Updates für bereits platzierte Orders (Poll)
+        remaining_open: list[dict] = []
+        newly_filled: list[dict] = []
         for od in open_orders:
-            ex = exchanges.get(od["broker"])
-            if not ex:
-                remaining_open.append(od); continue
+            ex = exchanges.get(od.get("broker", ""))
+            oid = od.get("broker_order_id")
+            if not ex or not oid:
+                remaining_open.append(od)
+                continue
             try:
-                upd = ex.get_order(od["broker_order_id"])
-                if upd.status in (OrderStatus.FILLED,):
-                    od["status"] = upd.status.value
-                    od["filled_qty"] = upd.filled_qty
-                    od["avg_fill_price"] = upd.avg_fill_price
-                    _log_fill(upd)
-                    fills.append(od)
-                    log.info("FILL: %s %s %.4f @ %.4f", upd.symbol, upd.side.value, upd.filled_qty, upd.avg_fill_price)
-                elif upd.status in (OrderStatus.CANCELED, OrderStatus.REJECTED):
-                    od["status"] = upd.status.value
-                    od["error"] = upd.error
-                    fills.append(od)
-                    log.warning("Order %s %s: %s", od["broker_order_id"], upd.status.value, upd.error)
-                else:
-                    # noch offen
-                    remaining_open.append(od)
-            except Exception as e:
-                log.warning("Polling order %s failed: %s", od.get("broker_order_id"), e)
+                upd = ex.get_order(oid)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Polling order %s failed: %s", oid, str(e)[:150])
+                remaining_open.append(od)
+                continue
+            st = upd.status
+            if st == OrderStatus.FILLED:
+                od.update({"status": st.value, "filled_qty": upd.filled_qty,
+                           "avg_fill_price": upd.avg_fill_price,
+                           "cost": _log_fill(upd, od)})
+                newly_filled.append(od)
+                log.info("FILL: %s %s %.6f @ %.4f", upd.symbol, upd.side.value,
+                         upd.filled_qty, upd.avg_fill_price)
+            elif st in (OrderStatus.CANCELED, OrderStatus.REJECTED):
+                od.update({"status": st.value, "error": upd.error})
+                newly_filled.append(od)
+                log.warning("Order %s %s: %s", oid, st.value, str(upd.error)[:150])
+            else:
                 remaining_open.append(od)
 
-        # Neue Orders platzieren
+        # 2) Neue Orders aus approved.json (+ Retries aus dem Vorlauf)
         approved = SharedState.approved()
-        new_orders = []
+        queue: list[dict] = []
         for trade in approved:
-            broker = trade["broker"]
+            t = dict(trade)
+            t.setdefault("attempts", 0)
+            queue.append(t)
+
+        new_orders: list[dict] = []
+        requeue: list[dict] = []
+        skipped: dict[str, int] = {}
+        for trade in queue:
+            broker = str(trade.get("broker", "")).lower()
+            sym = str(trade.get("symbol", ""))
+            trade["attempts"] = int(trade.get("attempts", 0)) + 1
             ex = exchanges.get(broker)
             if not ex:
-                _track_error(f"broker {broker} unavailable for {trade['symbol']}")
+                skipped[f"broker {broker} fehlt"] = skipped.get(f"broker {broker} fehlt", 0) + 1
+                _track_error(f"broker {broker} unavailable for {sym}")
+                if trade["attempts"] < MAX_ORDER_ATTEMPTS:
+                    requeue.append(trade)
                 continue
-            if not ex.is_market_open(trade["symbol"]):
-                log.info("Market closed for %s; skipping.", trade["symbol"])
+            if getattr(ex, "read_only", False):
+                msg = f"{broker} read-only – Order blockiert"
+                log.error("%s (%s)", msg, sym)
+                skipped[msg] = skipped.get(msg, 0) + 1
+                if trade["attempts"] < MAX_ORDER_ATTEMPTS:
+                    requeue.append(trade)
                 continue
-            coid = _client_order_id(trade["symbol"])
-            order = Order(
-                broker=broker,
-                symbol=trade["symbol"],
-                side=Side.BUY if trade["direction"] == "LONG" else Side.SELL,
-                qty=float(trade["qty"]),
-                type=OrderType.MARKET if trade.get("order_type", "MARKET") == "MARKET" else OrderType.LIMIT,
-                limit_price=trade.get("limit_price"),
-                stop_loss=trade.get("stop_loss"),
-                take_profit=trade.get("take_profit"),
-                leverage=int(trade.get("leverage", 1)),
-                client_order_id=coid,
-            )
-            # Leverage für CCXT-Exchanges setzen (best effort)
-            if hasattr(ex, "ex") and trade.get("leverage", 1) > 1 and trade.get("market") == "crypto_perp":
+            if not ex.is_market_open(sym):
+                log.info("Markt geschlossen für %s – vertagt (%d/%d).", sym,
+                         trade["attempts"], MAX_ORDER_ATTEMPTS)
+                skipped["market closed"] = skipped.get("market closed", 0) + 1
+                if trade["attempts"] < MAX_ORDER_ATTEMPTS:
+                    requeue.append(trade)
+                continue
+
+            coid = trade.get("client_order_id") or _client_order_id(sym)
+            order = _trade_to_order(trade, broker, coid)
+            if order.qty <= 0:
+                log.error("Order für %s verworfen: qty=%s unsinnig", sym, trade.get("qty"))
+                skipped["qty<=0"] = skipped.get("qty<=0", 0) + 1
+                _track_error(f"invalid qty for {sym}: {trade.get('qty')}")
+                continue
+            # Hebel für Perps (best effort – Scheitern ist kein Grund die Order zu killen)
+            if order.leverage > 1 and "perp" in (order.market or ""):
                 try:
-                    ex.ex.set_leverage(trade["leverage"], trade["symbol"])
-                except Exception as e:
-                    log.warning("Could not set leverage on %s: %s", broker, e)
+                    if not ex.set_leverage(sym, order.leverage):
+                        log.info("%s: Hebel %sx nicht gesetzt (API ignoriert/nicht unterstützt)",
+                                 broker, order.leverage)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Could not set leverage on %s: %s", broker, str(e)[:120])
             try:
                 placed = ex.place_order(order)
-                new_orders.append({
-                    "broker": placed.broker, "symbol": placed.symbol,
-                    "side": placed.side.value, "qty": placed.qty,
-                    "type": placed.type.value, "status": placed.status.value,
-                    "broker_order_id": placed.broker_order_id,
-                    "client_order_id": coid, "stop_loss": placed.stop_loss,
-                    "take_profit": placed.take_profit, "leverage": placed.leverage,
-                    "strategy": trade.get("strategy"),
-                    "direction": trade["direction"],
-                    "submitted_at": datetime.now(timezone.utc).isoformat(),
-                    "error": placed.error,
-                    "avg_fill_price": placed.avg_fill_price,
-                    "filled_qty": placed.filled_qty,
-                })
-                if placed.status == OrderStatus.FILLED:
-                    fills.append(new_orders[-1])
-                    _log_fill(placed)
-                    log.info("IMMEDIATE FILL: %s %s %.4f @ %.4f",
-                             placed.symbol, placed.side.value, placed.filled_qty or placed.qty, placed.avg_fill_price)
-                elif placed.status == OrderStatus.REJECTED:
-                    _track_error(f"Order rejected: {trade['symbol']} {placed.error}")
-                else:
-                    log.info("Submitted order %s for %s %s", placed.broker_order_id, trade["direction"], trade["symbol"])
-            except Exception as e:
-                _track_error(f"place_order exception for {trade['symbol']}: {e}")
+            except Exception as e:  # noqa: BLE001
+                _track_error(f"place_order exception for {sym}: {e}")
+                skipped["exception"] = skipped.get("exception", 0) + 1
+                if trade["attempts"] < MAX_ORDER_ATTEMPTS:
+                    requeue.append(trade)
+                continue
+            cost = {}
+            if placed.status == OrderStatus.FILLED:
+                cost = _log_fill(placed, trade)
+            rec = _order_to_dict(placed, trade, coid, cost)
+            new_orders.append(rec)
+            if placed.status == OrderStatus.FILLED:
+                newly_filled.append(rec)
+                log.info("IMMEDIATE FILL: %s %s %.6f @ %.4f (ref %.4f, slip %s bps)",
+                         placed.symbol, placed.side.value, placed.filled_qty or placed.qty,
+                         placed.avg_fill_price, placed.entry_reference_price or 0,
+                         cost.get("slippage_bps", "-"))
+            elif placed.status == OrderStatus.REJECTED:
+                _track_error(f"Order rejected: {sym} {placed.error}")
+                skipped[f"rejected: {str(placed.error)[:40]}"] = \
+                    skipped.get(f"rejected: {str(placed.error)[:40]}", 0) + 1
+            else:
+                log.info("Order %s für %s %s submitted", placed.broker_order_id,
+                         trade.get("direction"), sym)
 
-        # Approved-Liste leeren wenn alle verarbeitet (damit Risk nicht nochmal schickt)
-        SharedState.set_approved([])
+        # 3) Approved-Liste: nur verarbeitete raus, Rest zurückgeben
+        if requeue:
+            SharedState.set_approved(requeue)
+            log.warning("%d Trades für nächsten Zyklus zurückgelegt (%s)", len(requeue),
+                        ", ".join(f"{k}×{v}" for k, v in skipped.items()))
+        else:
+            SharedState.set_approved([])
 
-        # State zusammenführen: offene (rest) + neue, Fills anhängen
-        final_open = remaining_open + [o for o in new_orders if o["status"] in ("NEW", "PARTIAL", "PARTIALLY_FILLED")]
-        SharedState.update_order_state(final_open, fills[-200:])  # letzten 200 Fills behalten
-        log.info("Execution cycle done: %d open orders, %d fills total", len(final_open), len(fills))
+        final_open = remaining_open + [o for o in new_orders
+                                       if o["status"] in ("NEW", "PARTIAL", "PARTIALLY_FILLED")]
+        all_fills = (fills + newly_filled)[-200:]
+        SharedState.update_order_state(final_open, all_fills)
+        log.info("Execution cycle done: %d offen, %d Fills, %d neu, %d zurückgelegt%s",
+                 len(final_open), len(all_fills), len(new_orders), len(requeue),
+                 f" | skipped: {dict(skipped)}" if skipped else "")
 
-        # Portfolio-Snapshot aktualisieren
-        total_eq = 0.0; total_cash = 0.0; positions = []
+        # 4) Portfolio-Snapshot + Exit-Warnungen
+        total_eq = 0.0
+        total_cash = 0.0
+        positions: list[dict] = []
+        errors: dict[str, str] = {}
         for name, ex in exchanges.items():
             try:
                 acc = ex.get_account()
-                total_eq += acc.get("equity", 0)
-                total_cash += acc.get("cash", 0)
+                if acc.get("error"):
+                    errors[name] = str(acc["error"])[:150]
+                total_eq += float(acc.get("equity") or 0)
+                total_cash += float(acc.get("cash") or 0)
                 for p in ex.get_positions():
                     positions.append({
                         "symbol": p.symbol, "qty": p.qty, "avg_entry": p.avg_entry,
                         "broker": p.broker, "unrealized_pnl": p.unrealized_pnl,
                         "market": p.market, "leverage": p.leverage,
                     })
-            except Exception as e:
-                log.warning("Portfolio fetch failed for %s: %s", name, e)
+            except Exception as e:  # noqa: BLE001
+                errors[name] = str(e)[:150]
+                log.warning("Portfolio fetch failed for %s: %s", name, str(e)[:150])
         SharedState.set_portfolio(total_eq, total_cash, positions, "execution")
+        alerts = _reconcile_positions(exchanges, positions)
+        for a in alerts:
+            log.warning("EXIT-CHECK: %s", a)
 
-        hb.status = "ok"
-        hb.message = f"open={len(final_open)} submitted={len(new_orders)} equity={total_eq:.2f}"
+        hb.status = "error" if errors and total_eq == 0 else "ok"
+        hb.message = (f"open={len(final_open)} submitted={len(new_orders)} "
+                      f"fills={len(newly_filled)} equity={total_eq:.2f}")
+        hb.details = {"skipped": skipped, "requeued": len(requeue), "broker_errors": errors,
+                      "exit_alerts": alerts[:5], "dry_run": cfg.DRY_RUN}
         return 0
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.exception("Execution failed: %s", e)
         _track_error(str(e))
-        hb.status = "error"; hb.message = str(e)[:200]; return 1
+        hb.status, hb.message = "error", str(e)[:200]
+        return 1
     finally:
-        hb.last_run = time.strftime("%Y-%m-%dT%H:%M:%S")
+        hb.last_run = now_stamp()
         hb.duration_s = time.time() - t0
         hb.write()
 

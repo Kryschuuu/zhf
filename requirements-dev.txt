@@ -1,0 +1,3 @@
+# Zusätzliche Pakete für Entwicklung/Tests
+-r requirements.txt
+pytest>=8.0

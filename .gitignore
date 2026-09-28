@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Environment (NIE committen!)
+.env
+*.env
+
+# Data
+data/logs/*.log
+data/backtest_results/*.json
+data/heartbeats/*.json
+data/signals/*.json
+data/orders/*.json
+data/portfolio.json
+data/killswitch.json
+data/equity_log.jsonl
+data/reports/*.json
+data/reports/*.md
+
+# LM Studio / Paperclip / OS
+.lmstudio/
+.paperclip/
+node_modules/
+.DS_Store

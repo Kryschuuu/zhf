@@ -1,0 +1,99 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/big-pickle",
+  "provider": {
+    "opencode": {
+      "name": "OpenCode Zen (Free Tier – primary)",
+      "options": {
+        "freeOnly": true
+      },
+      "models": {
+        "big-pickle": {
+          "name": "Big Pickle — Coding/Agent-General (mystery model, 200k ctx)",
+          "options": { "maxTokens": 32000 }
+        },
+        "space-bunny-free": {
+          "name": "Space Bunny Free — Zero-retention, privacy-safe",
+          "options": { "maxTokens": 16000 }
+        },
+        "longcat-2.5-preview-free": {
+          "name": "LongCat 2.5 Preview Free — Lange Aufgaben, 200k ctx",
+          "options": { "maxTokens": 64000 }
+        },
+        "mimo-v2.5-flash-free": {
+          "name": "MiMo-V2.5-Flash Free — Xiaomi Schnellmodell",
+          "options": { "maxTokens": 16000 }
+        },
+        "mimo-v2-pro-free": {
+          "name": "MiMo V2 Pro Free — Xiaomi Coding",
+          "options": { "maxTokens": 32000 }
+        },
+        "mimo-v2-omni-free": {
+          "name": "MiMo V2 Omni Free — Xiaomi Multimodal",
+          "options": { "maxTokens": 16000 }
+        },
+        "minimax-m2.5-free": {
+          "name": "MiniMax M2.5 Free — Code-Generierung, 200k ctx",
+          "options": { "maxTokens": 32000 }
+        },
+        "gpt-5-nano": {
+          "name": "GPT-5 Nano — Kompakt, schnell, einfache Aufgaben",
+          "options": { "maxTokens": 8000 }
+        },
+        "nemotron-3-super-free": {
+          "name": "Nemotron 3 Super Free — NVIDIA 120B, 200k ctx",
+          "options": { "maxTokens": 32000 }
+        },
+        "nemotron-3-ultra-free": {
+          "name": "Neotone 3 Ultra Free / Nemotron 3 Ultra Free — NVIDIA 550B, 204k ctx",
+          "options": { "maxTokens": 32000 }
+        },
+        "nemotron-3.5-lightning-free": {
+          "name": "Nemotron 3.5 Lightning Free — NVIDIA schnell",
+          "options": { "maxTokens": 16000 }
+        }
+      }
+    },
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama (local, alternative offline fallback)",
+      "options": {
+        "baseURL": "http://127.0.0.1:11434/v1"
+      },
+      "models": {
+        "qwen2.5:7b": { "name": "Qwen 2.5 7B (ollama)" },
+        "llama3.2:3b": { "name": "Llama 3.2 3B (ollama)" }
+      }
+    },
+    "lmstudio": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LM Studio (local, offline fallback – wenn Internet/OpenCode nicht erreichbar)",
+      "options": {
+        "baseURL": "http://127.0.0.1:1234/v1",
+        "apiKey": "lm-studio"
+      },
+      "models": {
+        "qwen2.5-7b-instruct-q4_k_m": {
+          "name": "Qwen 2.5 7B (fallback CEO)",
+          "options": { "maxTokens": 4096, "temperature": 0.3 }
+        },
+        "llama-3.2-3b-instruct-q4_k_m": {
+          "name": "Llama 3.2 3B (fallback Research/Risk)",
+          "options": { "maxTokens": 2048, "temperature": 0.2 }
+        },
+        "qwen2.5-1.5b-instruct-q4_k_m": {
+          "name": "Qwen 2.5 1.5B (fallback Cost)",
+          "options": { "maxTokens": 1024, "temperature": 0.2 }
+        }
+      }
+    }
+  },
+  "agent": {
+    "ceo": { "model": "opencode/nemotron-3-ultra-free", "maxTokens": 32000, "temperature": 0.3 },
+    "research": { "model": "opencode/big-pickle", "maxTokens": 8000, "temperature": 0.2 },
+    "risk": { "model": "opencode/minimax-m2.5-free", "maxTokens": 4000, "temperature": 0.1 },
+    "backtest_review": { "model": "opencode/gpt-5-nano", "maxTokens": 2000, "temperature": 0.1 },
+    "cost": { "model": "opencode/mimo-v2.5-flash-free", "maxTokens": 2000, "temperature": 0.2 },
+    "coder": { "model": "opencode/big-pickle", "maxTokens": 16000, "temperature": 0.2 }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "mean_reversion": 1.0,
+  "breakout": 1.0,
+  "ema_crossover": 1.0,
+  "macd_flip": 0.8,
+  "funding_arb": 0.5
+}

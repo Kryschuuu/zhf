@@ -1,9 +1,30 @@
-# Fehlersuche (Troubleshooting) – ZHF 0.2.1
+# Fehlersuche (Troubleshooting) – ZHF 0.3.0
 
-Alle Punkte sind mit einem Befehl reproduzierbar. Die Pipeline läuft offline –
-**nirgends** wird still auf `0`, `[]` oder „keine Chance“ zurückgefallen: ein
-Feeder-Fehler landet im Statusreport (`data/market_data/status.json`) und im
-Watchdog-Befund, nicht als gezeichnete Order.
+Der **synthetische Selbsttest** läuft offline. Eine reguläre Broker-Pipeline benötigt
+Netzwerk/konfigurierte Zugänge. Daten- und Brokerfehler landen im Statusreport
+(`data/market_data/status.json`) und Watchdog-Befund statt als vermeintlich valide
+Marktdaten oder gezeichnete Orders.
+
+## Setup und Paperclip-Provisionierung
+
+```bash
+./setup-script.sh --check-only
+./setup-script.sh --mode docker --provision-paperclip
+python -m scripts.common.models
+```
+
+- Docker-Instanzen laufen authentifiziert. Beim ersten Start im Browser den
+  ersten User/Board-Owner anlegen und dann die CLI mit dem vollständigen Befehl
+  aus `docs/PAPERCLIP_SETUP.md` (`node /app/cli/dist/index.js auth login`) koppeln.
+- Setup-Agenten erhalten `heartbeat.enabled=false`; Aufgaben bleiben unzugewiesen
+  im Backlog. Paperclip-Routinen müssen nach Prüfung bewusst aktiviert werden.
+- `node-too-old`: native Paperclip-CLI braucht Node.js ≥24.11.0. Docker benötigt
+  Node nicht auf dem Host.
+- `opencode-models-unverified`: der Katalog war offline oder OpenCode fehlte.
+  Setup setzt keine Verfügbarkeit voraus; das Laufzeitsystem versucht danach
+  den konfigurierten Zen-Fallback und ggf. einen lokalen `/v1/models`-Server.
+- `paperclip-provision-failed` mit 401/403: Zugang/Board-Rolle fehlt; niemals
+  Browser-Cookies oder Token in `.env`/Issues kopieren.
 
 ## 1. Befund → Ursache → Fix
 
@@ -64,7 +85,7 @@ ZHF_DATA_DIR=/tmp/zhf-live-test python -m scripts.run_pipeline --only research,r
 5. `tail -40 data/logs/fills.log` → Fills inkl. `ref_price`, `slippage_bps`, `est_fee_usd`, `mode`.
 6. Selbsttest: `python -m scripts.monitoring.synth_test` – läuft ohne Keys und ohne Netz.
 
-**Killswitch-Politik (0.2.1):** kritische Watchdog-Befunde lösen den Killswitch nur aus,
+**Killswitch-Politik (seit 0.2.1):** kritische Watchdog-Befunde lösen den Killswitch nur aus,
 wenn **mindestens ein Broker verbunden** ist – sonst blockiert ein frisches Setup (keine
 Keys, kein LLM) jeden weiteren Lauf, ohne dass etwas zu schützen wäre. Ohne Broker bleibt
 es bei `CRITICAL` im Report und Exit-Code 1. Zurücksetzen nach behobener Ursache:
@@ -77,7 +98,7 @@ python -m scripts.monitoring.watchdog --reset-killswitch   # schreibt active=fal
 
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m pytest            # 100 Tests, komplett offline (Stubs, Fake-HTTP, gefälschte Zeit)
+python -m pytest            # 114 Tests, offline (Stubs, Fake-HTTP und Shell/Provisionierungs-Tests)
 python -m pytest -m integration -q   # nur die End-to-End-Läufe
 ```
 

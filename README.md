@@ -1,17 +1,19 @@
 # ZHF – Multi-Agent Algorithmic Trading System
 
-> **Version 0.2.0 "FreeZen"** – siehe [CHANGELOG.md](CHANGELOG.md)
+> **Version 0.3.0 "SafeBootstrap"** – siehe [CHANGELOG.md](CHANGELOG.md)
 
-Ein vollständig lokales, **Paperclip-orchestriertes Multi-Agent-Handelssystem**
-mit **kostenlosen OpenCode Zen-Free-Modellen** (keine API-Keys, keine Kosten).
+Ein lokal betriebenes, **Paperclip-orchestriertes Multi-Agent-Handelssystem**
+mit OpenCode Zen als bevorzugtem LLM-Harness und lokalem LM-Studio/Ollama-Fallback.
+Modellverfügbarkeit wird beim Setup geprüft; fehlende Zen-Modelle werden durch
+verfügbare Alternativen ersetzt.
 > Entwickelt für passives Einkommen mit minimalem Kapitaleinsatz (ab ~500 €)
 > auf **Alpaca** (Aktien/Krypto/Forex), **BingX** und **Bitunix** (Crypto-Perps).
 > LM Studio dient als Offline-Fallback bei Netzausfall.
 
 ## Hardware (dein Setup)
 
-- **CPU:** Intel N150 (4C/4T @ 3.6GHz) – reicht völlig aus, da alle
-  intensiven LLM-Aufgaben in der Cloud (OpenCode-Free-Tier) laufen.
+- **CPU:** Intel N150 (4C/4T @ 3.6GHz) – für Python-Pipelines und
+  regelbasierte Fallbacks; Remote-LLM-Aufgaben hängen von Provider-Verfügbarkeit ab.
 - **RAM:** 16 GB (nur ca. 2–3 GB durch Python-Pipelines belegt – KEIN
   permanenter LLM im Speicher!)
 - **GPU:** nicht benötigt (iGPU unbenutzt)
@@ -21,9 +23,14 @@ mit **kostenlosen OpenCode Zen-Free-Modellen** (keine API-Keys, keine Kosten).
 Im Gegensatz zum initialen lokalen Setup läuft das System jetzt **ohne
 dauerhaft geladene LLMs** auf deinem Rechner – Ressourcenverbrauch ist minimal.
 
-## Verwendete Free-Modelle (keine Anmeldung, keine Kosten)
+## Bevorzugte OpenCode-Modelle und Fallbacks
 
-| Agent | Free-Modell | Größe/Kontext | Aufgabe |
+Die Tabelle zeigt Präferenzen, keine feste Verfügbarkeitsgarantie: Setup und
+LLM-Client prüfen `opencode models opencode` und wählen pro Agent ein verfügbares
+Ersatzmodell. Zen-Zugang, Rate-Limits und Nutzungsbedingungen hängen vom aktuellen
+OpenCode-Angebot ab.
+
+| Agent | Bevorzugtes Modell | Größe/Kontext | Aufgabe |
 |-------|-------------|---------------|---------|
 | **CEO** | `opencode/nemotron-3-ultra-free` (Neotone 3 Ultra Free / NVIDIA Nemotron 3 Ultra 550B) | 204k ctx | Tagesberichte, Strategie-Entscheidungen |
 | **Research** | `opencode/big-pickle` | 200k ctx | Marktscan, Signale |
@@ -48,7 +55,7 @@ dauerhaft geladene LLMs** auf deinem Rechner – Ressourcenverbrauch ist minimal
 ```
 zhf/
 ├── agents/                     # Paperclip-Skills pro Agent (Markdown)
-├── config/paperclip_agents.json# Fertige Agent-Konfiguration zum Import
+├── config/paperclip_agents.json# Versionierte Paperclip-/Agenten-Blaupause
 ├── data/                       # Runtime-State (vom System beschrieben)
 │   ├── signals/      candidates.json → validated.json
 │   ├── orders/       approved.json, state.json
@@ -63,8 +70,11 @@ zhf/
 │   └── SKILLS.md               # Skills-Überblick
 ├── exchanges/          # Broker-Adapter (Alpaca, BingX, Bitunix)
 ├── prompts/            # System-Prompts (CEO, Research, Risk, Exec, Cost, Backtest)
+├── setup-script.sh    # Bash-Setup; Fish-Start über setup-script.fish
+├── setup-script.fish  # Fish-kompatibler Launcher
+├── Dockerfile.paperclip / docker-compose.paperclip.yml # persistentes Paperclip-Docker-Setup
 ├── scripts/
-│   ├── common/         # config, logger, llm-Client (OpenCode+LMSTudio-Fallback), state
+│   ├── common/         # config, logger, LLM-Client, Modell-Fallbacks, State
 │   ├── research/       # Research-Agent (Prozess + opencode CLI)
 │   ├── backtest/       # Backtest-Engine + Agent
 │   ├── risk/           # Risk-Management
@@ -72,6 +82,7 @@ zhf/
 │   ├── cost/           # Cost-Optimizer
 │   ├── ceo/            # Tagesbericht
 │   ├── monitoring/     # Watchdog + Synth-Test
+│   ├── paperclip_provision.py # Idempotente ZHF-Firmen-Provisionierung
 │   └── run_pipeline.py # Einmal komplett durchlaufen
 ├── strategies/         # Indikatoren, Signale, Watchlist, Strategie-Gewichte
 ├── .opencode/opencode.json  # OpenCode-Provider-Konfig (alle Free-Modelle)
@@ -81,62 +92,102 @@ zhf/
 
 ## Schnellstart
 
-### 1. Setup-Skript ausführen
-Das Skript prüft automatisch auf vorhandene Installationen (OpenCode, LM Studio,
-Ollama, Paperclip, PostgreSQL, Docker) und nutzt diese wiederverwendbar:
+### 1. Setup ausführen
+
+Das idempotente Setup prüft Python, Node/Paperclip, Docker, OpenCode-Konfiguration
+und den Zen-Modellkatalog. Es erstellt `.venv` und `.env` (ohne bestehende Werte
+zu überschreiben), zeigt bei erkanntem Docker ein interaktives Menü und startet
+standardmäßig einen isolierten synthetischen Ende-zu-Ende-Test.
+
 ```bash
-cd /home/user/zhf
+./setup-script.sh
+# alternativ aus Fish:
+fish setup-script.fish
+# Rückwärtskompatibler Einstieg:
 bash scripts/setup.sh
 ```
-Ein detaillierter Report wird nach `data/setup_report.json` geschrieben.
 
-### 2. Test der Free-Modelle (ohne Key!)
+Der Synth-Test nutzt `data/synth`, `ZHF_SYNTH=1`, `ZHF_SKIP_LLM=1` und
+`DRY_RUN=true`. Er spricht keine Broker-API an und kann keine echten Orders
+platzieren. Der Diagnosebericht steht in `data/setup_report.json`.
+
+Nützliche Optionen:
+
 ```bash
-opencode run --model opencode/big-pickle --auto "Sag nur OK wenn du mich hörst."
+./setup-script.sh --check-only                 # nur Voraussetzungen prüfen
+./setup-script.sh --mode docker                # Paperclip über Docker Compose starten
+./setup-script.sh --mode native               # native Paperclip-Installation starten
+./setup-script.sh --mode docker --provision-paperclip
+./setup-script.sh --mode docker --invite-user --invite-role operator
 ```
-Du solltest sofort eine Antwort von Big Pickle erhalten. (Wenn OpenCode noch nicht
-installiert ist, gibt `scripts/setup.sh` dir den Installationsbefehl aus.)
 
-### 3. Broker-Keys
+Für Docker wird Paperclip auf `127.0.0.1` gebunden und im authentifizierten Modus
+betrieben. Beim ersten Start den ersten Benutzer/Board-Owner im Browser anlegen,
+CLI im Container koppeln und danach `--provision-paperclip` erneut ausführen.
+Neue Benutzer werden über kurzlebige Paperclip-Einladungslinks registriert; das
+Skript verschickt keine E-Mails.
+
+### 2. Broker-Schlüssel und Modelle
+
 ```bash
-cd /home/user/zhf
-cp .env.example .env   # hat setup.sh bereits erledigt
-nano .env              # Alpaca-Paper-Keys eintragen
+nano .env                 # zum Start nur Alpaca-Paper-Keys ergänzen
+python -m scripts.common.models
 ```
 
-### 4. Funktionstest (ohne echte Orders)
+Die bevorzugten Zen-Modelle sind keine feste Laufzeitannahme: Das Setup wählt pro
+Agent das erste verfügbare Modell aus der versionierten Fallback-Reihenfolge.
+Wenn OpenCode oder der Katalog nicht erreichbar sind, wird ein lokaler
+OpenAI-kompatibler Server (LM Studio/Ollama/llama.cpp/vLLM) verwendet, sofern er
+läuft und aus der ausführenden Laufzeit erreichbar ist; andernfalls greifen
+regelbasierte bzw. deterministische Pfade. In Docker ist `127.0.0.1` der
+Container, nicht der Host; ein Host-LLM muss bewusst über eine erreichbare
+Gateway-Adresse konfiguriert werden.
+
+### 3. Paperclip-Firma provisionieren
+
+Nach der Ersteinrichtung/CLI-Anmeldung:
+
+```bash
+./setup-script.sh --mode docker --provision-paperclip
+# oder direkt:
+python -m scripts.paperclip_provision --action provision
+```
+
+Die Provisionierung legt `zhf-trading`, sieben Agenten, die Skills aus `agents/`
+und vier unzugewiesene Setup-Aufgaben an. Sie ist wiederholbar: bereits vorhandene
+Objekte werden wiederverwendet. Neue Agenten bleiben im Leerlauf, ihre Heartbeats
+sind deaktiviert, Aufgaben starten keine Agenten. Neue menschliche Mitglieder
+können mit `--invite-user --invite-role operator` eingeladen werden.
+
+### 4. Offline-Funktionstest und Monitoring
+
 ```bash
 . .venv/bin/activate
-python -m scripts.monitoring.synth_test   # Testdaten
-python -m scripts.monitoring.watchdog     # Health-Check
+python -m scripts.monitoring.synth_test --keep
+python -m scripts.monitoring.watchdog
+python -m pytest
 ```
 
-### 5. Paperclip installieren
-```bash
-npx paperclipai onboard --yes
-```
-Dann gemäss `docs/PAPERCLIP_SETUP.md` die 6 Agenten + Watchdog im Dashboard
-anlegen. Die Agent-Konfigurationen in `config/paperclip_agents.json` dienen
-als Vorlage.
+### 5. Operative Pipeline
 
-### 6. Pipeline laufen lassen
-Sobald Alpaca-Paper-Keys gesetzt sind:
-```bash
-python -m scripts.run_pipeline
-```
-Die Heartbeats werden danach automatisch von Paperclip getriggert.
+Paperclip-Agenten/Heartbeats und echte Broker-Ausführung werden **nicht** durch
+das Setup aktiviert. Erst nach Prüfung der synthetischen Reports, Risikolimits,
+Paper-Trading-Zugangsdaten und Broker-Policies dürfen Heartbeats manuell aktiviert
+werden. `python -m scripts.run_pipeline` ist ein regulärer Broker-Pipeline-Lauf;
+für Tests ohne Broker verwende `python -m scripts.run_pipeline --synth --no-llm`.
 
-### 7. Tests und Konfig-Abgleich
+### 6. Tests und Konfig-Abgleich
+
 ```bash
 python -m pip install -r requirements-dev.txt
-python -m pytest              # 100 Tests, komplett offline (keine Broker-Requests)
-python -m scripts.sync_env    # fehlende .env-Schlüssel aus .env.example ergänzen
-python -m scripts.materialize_config   # Paperclip-Config auf den echten Repo-Pfad setzen
+python -m pytest
+python -m scripts.sync_env
+python -m scripts.materialize_config
 ```
 
 ## Die 6 Agenten im Überblick
 
-| Agent | Runtime | Free-Modell | Heartbeat | Aufgabe |
+| Agent | Runtime | bevorzugtes Modell | Heartbeat (manuell zu aktivieren) | Aufgabe |
 |-------|---------|-------------|-----------|---------|
 | **CEO** Elara Voss | opencode_local | Nemotron 3 Ultra Free (550B) | Täglich EOD | Strategie, Berichte |
 | **Research** Jordan Chen | opencode_local | Big Pickle | Alle 30 Min | Signale |
@@ -144,6 +195,10 @@ python -m scripts.materialize_config   # Paperclip-Config auf den echten Repo-Pf
 | **CRO** Marcus Okonkwo | process | MiniMax M2.5 Free | Alle 5 Min | Limits, Killswitch |
 | **Execution** Sasha Kowalski | process | KEIN LLM | 1 Min (Marktzeit) | Orders, Fills |
 | **Cost Opt** Naomi Bergström | process | MiMo V2.5 Flash Free | Stündlich | Gebühren/Ressourcen |
+
+Der Watchdog ist ein zusätzlicher siebter Paperclip-Agent. Die automatisierte
+Provisionierung erstellt alle sieben Agents mit deaktivierten Heartbeats; die
+Zeitangaben oben sind empfohlene spätere Betriebsintervalle, keine aktiven Jobs.
 
 ## Handelsstrategien (capital-effizient für kleine Konten)
 
@@ -206,8 +261,9 @@ Killswitch zurücksetzen: `python -m scripts.monitoring.watchdog --reset-killswi
 - **Kein finanzieller Rat:** Trading birgt Verlustrisiken. Nutze nur Kapital,
   das du entbehren kannst. Teste ausführlich im Paper-Modus, bevor du live
   gehst.
-- **Keine Cloud-Kosten für LLMs:** Alle Agenten nutzen die kostenlose Zen-Tier
-  von OpenCode. Die einzigen Kosten sind Handelsgebühren bei den Brokern.
+- **Modellnutzung:** Zen-Tier und Free-Modelle können ohne eigene Provider-Keys
+  verfügbar sein; Verfügbarkeit, Limits und Nutzungsbedingungen ändern sich.
+  Es werden keine bezahlten Provider-Keys durch das Setup angelegt.
 - **Offline-fähig:** Wenn Internet ausfällt, fällt der LLM-Client automatisch
   auf das lokale LM Studio zurück (sofern ein Modell geladen ist).
 - **Determinismus bei Orders:** Execution und Backtest laufen OHNE LLM,

@@ -1,0 +1,28 @@
+# Add the ZHF Python runtime to Paperclip's maintained production image.
+# The full repository is mounted at /workspace/zhf by Compose so process agents
+# run the exact checkout being configured. Paperclip itself remains the image's
+# official entrypoint and runs as its non-root `node` user.
+ARG PAPERCLIP_IMAGE=ghcr.io/paperclipai/paperclip:latest
+FROM ${PAPERCLIP_IMAGE}
+
+USER root
+WORKDIR /tmp/zhf-build
+COPY requirements.txt ./requirements.txt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-venv python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/zhf-venv \
+    && /opt/zhf-venv/bin/pip install --no-cache-dir --disable-pip-version-check -r requirements.txt \
+    && mkdir -p /workspace/zhf \
+    && chown node:node /workspace/zhf \
+    && rm -rf /tmp/zhf-build
+
+ENV PATH="/opt/zhf-venv/bin:${PATH}" \
+    PYTHONPATH="/workspace/zhf" \
+    ZHF_DATA_DIR="/workspace/zhf/data" \
+    ENVIRONMENT="paper" \
+    DRY_RUN="true"
+
+# Leave the runtime user unset so Paperclip's official entrypoint can repair
+# bind-mount ownership and then drop privileges to `node` before starting.
+WORKDIR /app

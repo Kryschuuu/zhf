@@ -1,14 +1,14 @@
 # Multi-Agent Algorithm Trading System (MATS)
-## Orchestriert via Paperclip · OpenCode Zen Free-Modelle (primär) · LM Studio (offline Fallback)
+## Orchestriert via Paperclip · OpenCode Zen (bevorzugt) · OpenAI-kompatible lokale LLMs (Fallback)
 
-> **Ziel:** Passive, capital-effiziente Einkünfte über Aktien (Alpaca), Forex (Alpaca),
-> Krypto-Spot & -Perpetuals (BingX, Bitunix) mit minimalem Kapitaleinsatz
-> (~500 € Startkapital) und maximaler Automatisierung.
+> **Ziel:** Forschungs- und Paper-Trading-Pipeline über Aktien (Alpaca), Krypto-Spot
+> und Perpetuals (BingX, Bitunix) mit expliziten Risiko- und Freigabegates.
 >
-> **Wichtig:** Alle intensiven LLM-Aufgaben laufen auf **kostenlosen OpenCode Zen
-> Free-Modellen** (Big Pickle, Nemotron 3 Ultra/Super, MiMo V2.5 Flash, MiniMax M2.5,
-> LongCat 2.5, Space Bunny, GPT-5 Nano). LM Studio mit lokalen Q4-Modellen dient
-> **nur** als Offline-Fallback bei Netzausfall.
+> **Modellrouting:** Zen-Modell-IDs sind zur Laufzeit veränderlich. `scripts/common/models.py`
+> prüft den erreichbaren Katalog und wählt je LLM-Agent die erste verfügbare
+> Präferenz/Fallback-ID. Wenn OpenCode nicht erreichbar ist, versucht der LLM-Client
+> einen geladenen lokalen OpenAI-kompatiblen Server (LM Studio, Ollama, llama.cpp,
+> vLLM). Verfügbarkeit, Anmeldung, Limits und Preisbedingungen liegen beim Provider.
 
 ---
 
@@ -54,11 +54,15 @@
                                   └──────────────────┘
 ```
 
-### Modellzuordnung – Agent → Free-Modell (OpenCode Zen)
+### Modellzuordnung – Agent → bevorzugte OpenCode-ID
 
-| Agent | Free-Modell (primär) | Grösse/Kontext | Begründung | Offline-Fallback (LM Studio) |
+Die nachfolgenden IDs sind Präferenzen. Das Setup und die Laufzeit prüfen die
+Katalogverfügbarkeit und wählen anhand der geordneten Fallback-Liste aus
+`scripts/common/models.py` ein verfügbares Zen-Modell.
+
+| Agent | bevorzugte ID | Größe/Kontext laut Modellkonfiguration | Begründung | lokaler Fallback (falls geladen) |
 |-------|----------------------|----------------|------------|-------------------------------|
-| **CEO** | `opencode/nemotron-3-ultra-free` (Neotone 3 Ultra Free / Nemotron 3 Ultra 550B) | 204k ctx | Stärkstes verfügbares Free-Modell; komplexes Reasoning, lange Berichte, Portfolio-Analysen über viele Daten | `qwen2.5-7b-instruct-q4_k_m` (~4.7GB) |
+| **CEO** | `opencode/nemotron-3-ultra-free` | providerabhängig | Präferenz für Berichte/Reasoning; wird nur gewählt, wenn der Katalog die ID anbietet | beliebiges geladenes lokales Modell |
 | **Research** | `opencode/big-pickle` | 200k ctx | Coding/Agent-mystery-Modell, gut bei Mustererkennung auf JSON-Daten, Tool-Calling | `llama-3.2-3b-instruct-q4_k_m` (~2GB) |
 | **Risk/CRO** | `opencode/minimax-m2.5-free` | 200k ctx | Starke Code/Logik-Performance, zuverlässiges JSON, lange Kontexte für Portfolio-Daten | `llama-3.2-3b-instruct-q4_k_m` |
 | **Backtest (Review)** | `opencode/gpt-5-nano` | kompakt | Schnelles kleines Modell für kurze Plausibilitäts-Kommentare | `qwen2.5-1.5b-instruct-q4_k_m` |
@@ -73,22 +77,23 @@
 - `opencode/nemotron-3.5-lightning-free` – Schnelleres NVIDIA-Modell für einfache Tasks
 - `opencode/mimo-v2-pro-free` – Stärkeres Xiaomi-Modell (Coding), Reserve für Research
 
-### Warum OpenCode Free primär statt lokal LM Studio?
-1. **Kein RAM-Druck auf dem N150:** Dein 4C/16GB-System wird nicht von 7B-Modellen blockiert.
-   Die Free-Modelle laufen in der Cloud, lokale Ressourcen bleiben für Data-Pipelines.
-2. **Bessere Modellqualität:** Nemotron 3 Ultra (550B Parameter!) und MiniMax M2.5 sind
-   einem lokalen 7B-Modell weit überlegen – besser für komplexe Finanzentscheidungen.
-3. **Keine Kosten:** Alle Modelle sind zum Zeitpunkt der Einrichtung kostenlos im
-   OpenCode Zen-Free-Tier verfügbar.
-4. **Privacy-Option:** Space-Bunny-Free mit Zero-Retention für sensible Analysen.
-5. **Robustheit:** Wenn das Internet ausfällt, greift der LLM-Client **automatisch**
-   auf das lokale LM Studio zu (keine harte Downtime).
+### Warum OpenCode als bevorzugter Harness?
+1. **Kein permanent geladenes Modell nötig:** Lokale CPU/RAM-Ressourcen bleiben für
+   Python, Daten und Monitoring frei.
+2. **Modellwahl ist austauschbar:** Die Zen-Katalogprüfung und Fallback-Reihenfolge
+   lassen sich unabhängig von den deterministischen Handelskomponenten aktualisieren.
+3. **Provider-Konditionen sind nicht garantiert:** Zugang, Anmeldung, Rate-Limits und
+   Kosten hängen vom aktuellen OpenCode-Angebot und der Betreiberkonfiguration ab.
+4. **Privacy-Option:** Ein lokaler Endpunkt kann verwendet werden, wenn keine Daten an
+   einen Remote-Provider gesendet werden sollen.
+5. **Resilienz:** Bei Netzwerk-, Rate-Limit-, Timeout- oder Modellfehlern versucht der
+   LLM-Client automatisch einen erreichbaren lokalen OpenAI-kompatiblen Server.
 
-### Wann LM Studio verwendet wird
-- Manueller Betrieb ohne Internet (CachyOS offline)
-- Wenn OpenCode Free-Tier-Limits erreicht oder TLS/Netzwerk-Fehler auftreten
-- Für extrem schnelle, einfache Abfragen wo Cloud-Latenz stört
-- Kostenlose Probe-/Backup-Phase
+### Wann lokale LLMs verwendet werden
+- Offline-Betrieb oder restriktive Firmen-Netze
+- Wenn Remote-Modell/Katalog nicht erreichbar ist
+- Wenn Datenschutzrichtlinien lokale Verarbeitung verlangen
+- Wenn ein lokaler Endpunkt für bestimmte einfache Aufgaben bevorzugt wird
 
 ---
 
@@ -97,38 +102,44 @@
 ### Harness-Architektur
 | Schicht | Technologie | Begründung |
 |---------|-------------|------------|
-| **Orchestrierung** | Paperclip (npx paperclipai) | Org-Chart, Budgets, Routinen, Approvals, Audit-Dashboard |
-| **LLM-Agenten (CEO, Research, Risk, Backtest-Review, Cost)** | `opencode_local`-Adapter | OpenCode CLI mit Zen-Free-Anbieter; jeder Agent bekommt sein eigenes Modell via `--model`-Flag |
-| **Deterministische Worker (Execution, Backtest-Engine)** | `process`-Adapter | Reine Python-Prozesse, kein LLM, schnelle deterministische Ausführung |
-| **LLM-Client für Worker** | `scripts/common/llm.py` | Wrapper: primär `opencode run` per CLI, Fallback auf LM Studio HTTP-API |
-| **Lokaler Fallback** | LM Studio Local Server (Port 1234) | Nur bei OpenCode-Ausfall; GGUF Q4_K_M Modelle auf CPU |
+| **Orchestrierung** | Paperclip (Docker Compose oder native CLI ≥24.11.0) | Org-Chart, Tasks, Budgets, Routinen, Approvals, Audit-Dashboard |
+| **LLM-Agenten (CEO, Research)** | `opencode_local`-Adapter | Paperclip startet OpenCode im Workspace; Modell-ID wird aus dem erreichbaren Katalog gewählt |
+| **LLM-Aufrufe in Worker-Prozessen** | `scripts/common/llm.py` | OpenCode CLI mit geordneter Modell-Fallback-Liste; lokaler HTTP-Fallback bei Aufruffehlern |
+| **Deterministische Worker (Execution, Backtest-Engine)** | `process`-Adapter | Python-Prozesse; Execution und Backtest-Engine verwenden kein LLM |
+| **Lokaler Fallback** | LM Studio, Ollama, llama.cpp oder vLLM | Erreichbarer OpenAI-kompatibler `/v1/models`-Endpunkt; Modell muss geladen sein |
 
-### OpenCode-Konfiguration (`/home/user/zhf/.opencode/opencode.json`)
-Die zentrale Konfiguration definiert einen `opencode`-Provider mit allen Free-Modellen
-und einen `lmstudio`-Provider als Fallback. Siehe `.opencode/opencode.json` im Repo.
+### OpenCode-Konfiguration (`$ZHF_REPO_ROOT/.opencode/opencode.json`)
+Die zentrale Konfiguration definiert den Zen-Provider und optionale lokale Provider.
+Die Laufzeit prüft die Zen-Modellliste; `.opencode/opencode.json` dokumentiert die
+verfügbaren Präferenzen, ist aber keine Verfügbarkeitsgarantie.
 
-### Adapter-Typen in Paperclip
-| Agent | adapter_type | Command/Config |
-|-------|--------------|----------------|
-| CEO | `opencode_local` | `--model opencode/nemotron-3-ultra-free`, CWD=/home/user/zhf, System-Prompt aus `prompts/ceo.md` |
-| Research | `opencode_local` | `--model opencode/big-pickle` |
-| Risk | `process` | `/home/user/zhf/.venv/bin/python -m scripts.risk.run` (ruft intern opencode auf) |
-| Backtest | `process` | `/home/user/zhf/.venv/bin/python -m scripts.backtest.run` |
-| Execution | `process` | `/home/user/zhf/.venv/bin/python -m scripts.execution.run` (KEIN LLM) |
-| Cost | `process` | `/home/user/zhf/.venv/bin/python -m scripts.cost.run` |
+### Adapter-Typen und Runtime-Pfade
 
-> **Hinweis:** Paperclips `opencode_local`-Adapter spawnt selbst OpenCode. Für CEO
-> und Research nutzen wir diesen direkten Adapter. Für die Worker-Prozesse (Risk,
-> Cost, Backtest-Review) rufen wir `opencode run` via Python-Subprocess auf, damit
-> wir den Aufruf kontrolliert in unsere Pipeline (JSON-Validierung, Retry,
-> Fallback) einbetten können.
+| Agentengruppe | Adapter | Runtime-Konfiguration |
+|---|---|---|
+| CEO, Research | `opencode_local` | Modell aus der verfügbaren Zen-Fallback-Reihenfolge; Prompt-Datei aus `prompts/`; CWD = Checkout-Root |
+| Risk, Backtest, Cost | `process` | `python -m scripts.<agent>.run`; LLM-Aufrufe laufen kontrolliert über `scripts/common/llm.py` |
+| Execution, Watchdog | `process` | Deterministische Python-Worker; keine modellbasierte Orderentscheidung |
+
+Native Installation verwendet den echten Checkout-Root und `.venv/bin/python`.
+Im Docker-Modus zeigt Paperclip auf `/workspace/zhf` und
+`/opt/zhf-venv/bin/python`; die ZHF-Dependencies sind im Runtime-Image installiert.
+
+Die Provisionierung ist idempotent und überschreibt keine bestehenden Agents.
+Neue Agents werden mit `runtimeConfig.heartbeat.enabled=false` erstellt. Routines
+und geplante Heartbeats müssen nach Review im Paperclip-Dashboard aktiviert werden.
 
 ---
 
 ## 3. Datenfluss & Heartbeat-Rhythmen
 
+Die Frequenzen im Diagramm sind Zielwerte für einen späteren Betrieb. Das Setup
+legt Agents/Tasks an, startet aber keine Paperclip-Heartbeats oder Routinen. Ein
+Betreiber prüft erst Synth-Report, Keys, Limits und Freigaben und aktiviert dann
+gezielt die gewünschten Schedules.
+
 ```
-Heartbeat-Schedule (Paperclip Routines)
+Heartbeat-Schedule (nach manueller Freigabe)
 │
 ├─ 30m ──► Research (opencode/big-pickle) ──► candidates.json
 │                                              │
@@ -174,7 +185,7 @@ Heartbeat-Schedule (Paperclip Routines)
 | Fehler | Reaktion |
 |--------|----------|
 | OpenCode TLS/Netzwerk-Fehler | Automatischer Fallback auf LM Studio lokal |
-| OpenCode Free-Rate-Limit | Retry mit exponentiellem Backoff (2s/4s/8s), danach Fallback |
+| OpenCode-Rate-Limit oder Modellfehler | Retry mit exponentiellem Backoff (2s/4s/8s), danach lokaler Fallback sofern verfügbar |
 | LM Studio nicht gestartet | LLM-Aufruf schlägt fehl, Prozess-Agent schreibt trotzdem Heartbeat (mit Fehler); Prozess-Worker nutzen dann Regel-Only-Logik (z.B. Research → reine Regel-Signale ohne LLM-Filter) |
 | Execution 3 Order-Fehler in 5 Min | Killswitch → STOP_TRADING + Alarm an CEO/Board |
 | Tages-DD > 3% | Killswitch (Risk Agent) |
@@ -185,29 +196,45 @@ Heartbeat-Schedule (Paperclip Routines)
 
 ---
 
-## 6. Deployment-Phasen
+## 6. Deployment und Setup-Sicherheit
 
-- **Phase 1 (Woche 1-2):** Alpaca Paper + BingX Testnet, `DRY_RUN=true`. Alle Agenten
-  mit opencode-Free-Modellen. System einpendeln lassen.
-- **Phase 2 (Woche 3-6):** Kleines Live-Kapital ($100 Alpaca + $50 BingX Spot).
-  Execution Policy: CEO + Board Approval erforderlich für erste Live-Trades.
-- **Phase 3 (ab Monat 2):** Skalierung erst wenn 60-Tage-Sharpe > 1.5 & DD < 8%.
-  Bitunix als zweiter Crypto-Broker dazu.
+`setup-script.sh` bietet drei Paperclip-Wege: laufende Instanz wiederverwenden,
+Paperclip in Docker Compose starten oder die native CLI verwenden. Docker bindet
+standardmäßig auf `127.0.0.1`, startet im authentifizierten Modus und persistiert
+Daten. Für die ZHF-Worker enthält das Docker-Image zusätzlich eine isolierte
+Python-Umgebung; der Checkout wird nach `/workspace/zhf` gemountet.
 
----
+Nach einem frischen Docker-Start legt ein Mensch im Browser den ersten Benutzer
+und Board-Owner an und koppelt danach die CLI. `scripts.paperclip_provision`
+verwendet die Paperclip-CLI und validiert Firma, sieben Agents, Skills und Tasks.
+Bestehende Objekte werden wiederverwendet, nicht gelöscht oder still überschrieben.
 
-## 7. Hardware-Auslastung nach Umstellung
+Neu provisionierte Agents haben deaktivierte Heartbeats; Setup-Aufgaben sind
+unzugewiesen und im Backlog. Die Schedule-Zeiten oben sind Zielkonfigurationen,
+keine automatisch gestarteten Paperclip-Routinen. Der Setup-Lauf endet mit einem
+isolierten Synth-Test (`data/synth`) und greift nicht auf echte Broker zu.
 
-Da die Free-Modelle in der Cloud laufen:
-- **RAM:** ~2–3 GB (nur Python-Prozesse, Daten, kein geladenes LLM)
-- **CPU:** Sehr gering (nur Indikatoren-Berechnungen, Pandas-Operationen)
-- **Netzwerk:** Einige MB/Stunde (OHLCV-Daten + LLM-Calls)
-- **LM Studio:** Muss **nicht** im Normalbetrieb laufen! Nur bei Offline-Nutzung vorladen.
+Empfohlene Aktivierung:
 
-Du kannst also parallel noch andere Programme auf dem N150 ausführen – anders
-als im ursprünglichen lokalen Modell-Setup, wo permanent 5GB RAM für das LLM
-reserviert waren.
+1. Synth- und Watchdog-Reports prüfen.
+2. Paper-Trading-Schlüssel, `DRY_RUN=true`, Broker-Feeds und Risk-Gates prüfen.
+3. Erst dann gewünschte Agent-Heartbeats/Routinen im Dashboard aktivieren.
+4. Live-Trading bleibt eine separate, explizite Board-Entscheidung und darf nicht
+   aus einer Setup- oder Modellprüfung abgeleitet werden.
 
-Wenn du zwischen Phasen wechselst (z.B. unterwegs ohne Internet), lässt du LM
-Studio mit dem 3B-Modell laufen – das System läuft ohne Unterbrechung weiter
-(automatischer Fallback).
+## 7. Hardware-Auslastung
+
+Wenn LLM-Aufgaben von einem erreichbaren Remote-Provider bedient werden, benötigt
+der Host kein permanent geladenes Modell. Bei lokaler Verarbeitung hängt die
+Auslastung vom geladenen Modell, Quantisierung und Laufzeit ab:
+
+- **RAM/CPU:** Python-Pipeline ohne lokales LLM ist leichtgewichtig; lokale GGUF-
+  Modelle benötigen zusätzlichen RAM/CPU.
+- **Netzwerk:** Broker-Marktdaten plus modellabhängige Requests an den gewählten
+  LLM-Provider.
+- **LM Studio/Ollama:** Muss im Normalbetrieb nicht laufen, ist aber notwendig,
+  wenn OpenCode ausfällt und ein lokaler Fallback gewünscht ist.
+
+Die automatische Fallback-Erkennung setzt einen kompatiblen, laufenden
+`/v1/models`-Endpunkt voraus. Ohne erreichbaren Remote- oder lokalen LLM bleiben
+sichere regelbasierte bzw. deterministische Fallbacks maßgeblich.

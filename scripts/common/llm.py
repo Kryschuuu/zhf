@@ -1,5 +1,5 @@
-"""LLM-Client – spricht primär über OpenCode CLI (Zen Free Tier),
-mit lokalem LLM-Server (LM Studio / Ollama / llama.cpp) als offline-Fallback.
+"""LLM-Client – spricht primär über ein verfügbares OpenCode-Zen-Modell,
+mit lokalem LLM-Server (LM Studio / Ollama / llama.cpp / vLLM) als Fallback.
 
 Warum CLI statt direkter HTTP-Aufruf gegen OpenCode?
   - OpenCode ist als `opencode_local`-Adapter in Paperclip integriert.
@@ -43,15 +43,6 @@ class LLMResponse:
     latency_s: float
     via: str  # "opencode" | "local"
 
-
-DEFAULT_AGENT_MODEL = {
-    "ceo": "opencode/nemotron-3-ultra-free",
-    "research": "opencode/big-pickle",
-    "risk": "opencode/minimax-m2.5-free",
-    "cost": "opencode/mimo-v2.5-flash-free",
-    "backtest": "opencode/gpt-5-nano",
-    "default": "opencode/big-pickle",
-}
 
 # Ports auf denen ein lokaler OpenAI-kompatibler Server lauschen könnte.
 # Reihenfolge entspricht Priorität (erster erreichbarer wird verwendet).
@@ -128,7 +119,16 @@ def call_llm_opencode(prompt: str, system_prompt: Optional[str] = None,
                       agent: str = "default", max_tokens: int = 4096,
                       temperature: float = 0.3) -> LLMResponse:
     """Rufe OpenCode CLI auf und gib Antwort zurück."""
-    model = DEFAULT_AGENT_MODEL.get(agent, DEFAULT_AGENT_MODEL["default"])
+    # Import lazily so `python -m scripts.common.models` doesn't preload the
+    # target module through scripts.common.__init__ and trigger a runpy warning.
+    from .models import select_agent_model
+
+    model = select_agent_model(agent)
+    if model is None:
+        raise LLMError(
+            f"no configured OpenCode Zen model is available for agent '{agent}'; "
+            "check `opencode models opencode` or configure a local LLM fallback"
+        )
     cwd = str(cfg.ROOT)
     full_prompt = ""
     if system_prompt:

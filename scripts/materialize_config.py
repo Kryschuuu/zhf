@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Erzeugt Konfigurationsdateien mit dem TATSÄCHLICHEN Repo-Pfad.
 
-`config/paperclip_agents.json` (und die Beispiel-Pfade in README/docs) enthalten
-absolute Pfade. Auf einer anderen Maschine – anderer Checkout-Ort, anderer User –
-zeigen die ins Leere: Paperclip findet dann weder venv noch Prompts und startet
-einen Interpreter, den es nicht gibt.
+`config/paperclip_agents.json` ist die portable ZHF-Blaupause mit relativen
+Pfaden. Für manuelle Paperclip-Imports oder Offline-Review erzeugt dieses Skript
+eine maschinenspezifische Kopie mit absoluten Pfaden (Checkout-Root und venv).
+Der Provisioner `scripts.paperclip_provision` braucht diese Kopie nicht.
 
     python -m scripts.materialize_config              # → config/paperclip_agents.local.json
     python -m scripts.materialize_config --inplace    # Vorlage selbst aktualisieren
@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -53,6 +54,28 @@ def _rewrite(value, old: str, new: str):
     return value
 
 
+def _materialize_paths(doc: dict) -> dict:
+    """Resolve the portable blueprint's repo-relative paths for manual import."""
+    interpreter = ROOT / ".venv" / "bin" / "python"
+    for agent in doc.get("agents", []):
+        adapter = agent.get("adapter_config") or {}
+        if "cwd" in adapter:
+            adapter["cwd"] = str(ROOT)
+        prompt = adapter.get("system_prompt_file")
+        if prompt:
+            prompt_path = Path(str(prompt)).expanduser()
+            adapter["system_prompt_file"] = str(
+                prompt_path if prompt_path.is_absolute() else (ROOT / prompt_path).resolve()
+            )
+        command = adapter.get("command")
+        if command:
+            parts = shlex.split(str(command))
+            if parts and (Path(parts[0]).name in ("python", "python3") or parts[0].endswith(".venv/bin/python")):
+                adapter["command"] = shlex.join([str(interpreter), *parts[1:]])
+        agent["adapter_config"] = adapter
+    return doc
+
+
 def build() -> tuple[dict, str, list[str]]:
     doc = json.loads(SRC.read_text(encoding="utf-8"))
     old = previous_root(doc) or str(ROOT)
@@ -63,6 +86,8 @@ def build() -> tuple[dict, str, list[str]]:
     else:
         notes.append(f"Pfade stimmen bereits ({ROOT})")
 
+    doc = _materialize_paths(doc)
+    notes.append("Repo-relative Prompt-/Interpreter-Pfade für manuellen Import aufgelöst")
     venv = ROOT / ".venv" / "bin" / "python"
     if not venv.exists():
         notes.append(f"WARNUNG: {venv} fehlt – zuerst 'bash scripts/setup.sh'")
@@ -129,9 +154,9 @@ def main(argv=None) -> int:
     if args.docs:
         _fix_docs(old, write=args.inplace)
     if not args.inplace:
-        print("Nächster Schritt: Paperclip-Import auf "
-              f"{DST.relative_to(ROOT)} zeigen lassen (siehe docs/PAPERCLIP_SETUP.md), "
-              "oder --inplace für die Vorlage.")
+        print("Die Datei ist eine Pfad-materialisierte Referenz für manuelle Einrichtung: "
+              f"{DST.relative_to(ROOT)}. Für automatisierte Provisionierung "
+              "`python -m scripts.paperclip_provision` verwenden.")
     return 0
 
 

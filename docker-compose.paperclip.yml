@@ -1,0 +1,54 @@
+services:
+  paperclip:
+    container_name: ${PAPERCLIP_CONTAINER_NAME:-zhf-paperclip}
+    image: zhf-paperclip:${ZHF_VERSION:-0.3.0}
+    build:
+      context: .
+      dockerfile: Dockerfile.paperclip
+      args:
+        PAPERCLIP_IMAGE: ${PAPERCLIP_IMAGE:-ghcr.io/paperclipai/paperclip:latest}
+    restart: unless-stopped
+    pids_limit: 2048
+    ports:
+      - "127.0.0.1:${PAPERCLIP_PORT:-3100}:3100"
+    # Do not pass the entire host .env into the Paperclip server environment;
+    # deployment secrets below are managed separately in paperclip-compose.env.
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3100"
+      USER_UID: "${USER_UID:-1000}"
+      USER_GID: "${USER_GID:-1000}"
+      PAPERCLIP_HOME: "/paperclip"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required; run setup-script.sh}"
+      PAPERCLIP_AGENT_JWT_SECRET: "${PAPERCLIP_AGENT_JWT_SECRET:?PAPERCLIP_AGENT_JWT_SECRET is required; run setup-script.sh}"
+      PAPERCLIP_TOOL_ACTION_SIGNING_SECRET: "${PAPERCLIP_TOOL_ACTION_SIGNING_SECRET:?PAPERCLIP_TOOL_ACTION_SIGNING_SECRET is required; run setup-script.sh}"
+      # Fail-safe trading mode: no ambient host variable can disable dry-run.
+      ENVIRONMENT: "paper"
+      DRY_RUN: "true"
+      ALPACA_PAPER: "true"
+      BINGX_TESTNET: "true"
+      BITUNIX_TESTNET: "true"
+      BITUNIX_ALLOW_LIVE_ORDERS: "false"
+      ZHF_DATA_DIR: "/workspace/zhf/data"
+      PYTHONPATH: "/workspace/zhf"
+    volumes:
+      - "${PAPERCLIP_DATA_DIR:-./data/docker-paperclip}:/paperclip"
+      - ".:/workspace/zhf"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3100/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    security_opt:
+      - no-new-privileges:true
+    labels:
+      org.opencontainers.image.title: "ZHF Paperclip"
+      org.opencontainers.image.version: "${ZHF_VERSION:-0.3.0}"

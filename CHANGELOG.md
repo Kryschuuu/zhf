@@ -4,6 +4,59 @@ Alle bemerkenswerten Änderungen am ZHF Multi-Agent Trading System werden in
 dieser Datei dokumentiert. Das Format folgt [Keep a Changelog](https://keepachangelog.com/de/1.0.0/)
 und die Versionierung folgt [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] – SafeBootstrap (Minor) – 2026-09-29
+
+### Hinzugefügt
+- `setup-script.sh` als kanonischer, idempotenter Bootstrap für Bash; `setup-script.fish`
+  startet dieselbe Implementierung nativ aus Fish. `scripts/setup.sh` bleibt als
+  rückwärtskompatibler Einstieg erhalten.
+- Interaktives Betriebsmenü mit Erkennung laufender Paperclip-Instanzen (API,
+  Docker-Container, native CLI/Instanz) und Auswahl zwischen bestehendem Server,
+  Docker Compose, nativer Installation oder lokalem Setup.
+- Docker-Deployment für Paperclip (`Dockerfile.paperclip`,
+  `docker-compose.paperclip.yml`) mit persistenten Daten, privatem Loopback-Binding,
+  authentifiziertem Modus, nicht-root Laufzeit und installiertem ZHF-Python-Runtime.
+- `scripts/paperclip_provision.py`: wiederholbare Provisionierung der ZHF-Firma,
+  sieben Agenten, Projekt-Skills und vier sichere Backlog-Aufgaben über die
+  unterstützte Paperclip-CLI. Vorhandene Objekte werden wiederverwendet, nicht
+  gelöscht oder überschrieben.
+- Paperclip-Einladung für neue menschliche Mitglieder mit kontrollierbarer Rolle
+  (`viewer`, `operator`, `admin`, `owner`); Einladungslinks werden nur interaktiv
+  ausgegeben und müssen privat geteilt werden.
+- Laufzeit-Modellauflösung in `scripts/common/models.py`: Zen-Katalog wird geprüft,
+  pro Agent wird bevorzugtes oder erstes verfügbares Ersatzmodell gewählt; lokale
+  OpenAI-kompatible Fallback-Endpunkte werden zusätzlich erkannt.
+- Automatischer isolierter End-to-End-Synth-Test nach Setup. Er nutzt
+  `ZHF_SYNTH=1`, `ZHF_SKIP_LLM=1`, `DRY_RUN=true` und `data/synth`; echte Broker
+  und Live-Orders werden nicht angesprochen.
+- Setup-Report dokumentiert Werkzeug-, Modell-, Paperclip- und Pipeline-Status
+  ohne Zugangsdaten.
+
+### Geändert
+- SemVer-Version auf `0.3.0` erhöht; Setup-/Paperclip-Dokumentation an die
+  aktuelle Paperclip-CLI und deren Node.js-Anforderung (≥24.11.0) angepasst.
+- Agenten werden bei der automatischen Provisionierung ohne aktive Heartbeats
+  erstellt; Setup-Aufgaben bleiben nicht zugewiesen und im Backlog. Bei einer
+  neuen ZHF-Firma wird die Freigabe für Folge-Hires nach der Ersteinrichtung wieder
+  aktiviert; bestehende Firmenrichtlinien werden nicht gelockert.
+- Aktivierung und Live-Trading erfordern weiterhin eine menschliche Freigabe.
+- `.env` wird nur angelegt, wenn sie fehlt; bestehende Werte bleiben erhalten,
+  fehlende Schlüssel werden ergänzt und lokale Secrets erhalten restriktive
+  Dateirechte. Docker-Secrets liegen ausschließlich in ignorierten Runtime-Dateien.
+- Docker erzwingt Paper-/Dry-Run- und Testnet-Modus unabhängig von ambienten
+  Shell-Variablen und injiziert nicht die gesamte `.env` in den Paperclip-
+  Prozess. Da der Checkout für manuelle Python-Worker gemountet ist, bleibt diese
+  Installation eine vertrauenswürdige Einzelbetreiber-Umgebung.
+
+### Behoben
+- Setup scheitert nicht mehr still an fehlenden/ungültigen OpenCode-Modellen;
+  Modellstatus, Fallback-Auswahl und nicht erreichbare Kataloge werden explizit
+  ausgewiesen.
+- Docker-/Native-Paperclip-Start und Provisionierung werden nach jedem Schritt
+  per Health-Check bzw. erneuter Ressourcenliste verifiziert.
+- Setup-Report wird atomar und JSON-korrekt geschrieben; keine Shell-Interpolation
+  von Pfaden oder Modellnamen in JSON.
+
 ## [0.2.1] – FreeZen (Patch) – 2026-09-28
 
 ### Geändert (Nachzug)

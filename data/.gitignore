@@ -1,4 +1,9 @@
 setup_report.json
+setup_models.json
+setup-opencode-models.txt
+setup-skills/
+paperclip-compose.env
+docker-paperclip/
 !.gitkeep
 !.gitignore
 !README.md

@@ -1,0 +1,16 @@
+.git
+.gitignore
+.env
+.env.*
+.venv
+data/
+config/*.local.json
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+node_modules
+build
+coverage
+.DS_Store

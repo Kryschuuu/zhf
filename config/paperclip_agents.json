@@ -1,46 +1,61 @@
 {
   "company": "zhf-trading",
+  "description": "ZHF is a safety-first, paper-trading-first multi-agent research and execution system. All live trading requires explicit human review.",
   "agents": [
     {
+      "key": "ceo",
       "name": "Elara Voss",
       "title": "Chief Executive Officer",
       "reports_to": "board",
+      "capabilities": "Coordinates the ZHF team, reviews reports, and escalates decisions to the human board. Never enables live trading without explicit board approval.",
       "adapter_type": "opencode_local",
       "adapter_config": {
-        "cwd": "/home/user/zhf",
+        "cwd": ".",
         "model": "opencode/nemotron-3-ultra-free",
-        "system_prompt_file": "/home/user/zhf/prompts/ceo.md",
-        "cli_flags": ["--auto"]
+        "system_prompt_file": "prompts/ceo.md",
+        "cli_flags": [
+          "--auto"
+        ]
       },
       "budget_monthly_cents": 0,
       "heartbeat_cron": "0 4 * * 2-6",
       "context_mode": "fat",
-      "skills": ["agents/ceo/skills/"]
+      "skills": [
+        "daily-briefing"
+      ]
     },
     {
+      "key": "research",
       "name": "Jordan Chen",
       "title": "Head of Research",
       "reports_to": "Elara Voss",
+      "capabilities": "Scans market data and produces bounded, evidence-based research signals. Does not place orders.",
       "adapter_type": "opencode_local",
       "adapter_config": {
-        "cwd": "/home/user/zhf",
+        "cwd": ".",
         "model": "opencode/big-pickle",
-        "system_prompt_file": "/home/user/zhf/prompts/research_agent.md",
-        "cli_flags": ["--auto"]
+        "system_prompt_file": "prompts/research_agent.md",
+        "cli_flags": [
+          "--auto"
+        ]
       },
       "budget_monthly_cents": 0,
       "heartbeat_cron": "*/30 * * * *",
       "context_mode": "thin",
-      "skills": ["agents/research_agent/skills/"]
+      "skills": [
+        "market-scan"
+      ]
     },
     {
+      "key": "backtest",
       "name": "Priya Patel",
       "title": "Head of Strategy Validation",
       "reports_to": "Elara Voss",
+      "capabilities": "Runs deterministic historical validation and emits concise review notes. Does not place orders.",
       "adapter_type": "process",
       "adapter_config": {
-        "cwd": "/home/user/zhf",
-        "command": "/home/user/zhf/.venv/bin/python -m scripts.backtest.run",
+        "cwd": ".",
+        "command": "python -m scripts.backtest.run",
         "env": {
           "OPENCODE_MODEL_REVIEW": "opencode/gpt-5-nano"
         }
@@ -49,13 +64,15 @@
       "heartbeat_cron": "*/15 * * * *"
     },
     {
+      "key": "risk",
       "name": "Marcus Okonkwo",
       "title": "Chief Risk Officer",
       "reports_to": "Elara Voss",
+      "capabilities": "Enforces hard portfolio, drawdown, position-size, and data-quality gates. Can veto every proposed order.",
       "adapter_type": "process",
       "adapter_config": {
-        "cwd": "/home/user/zhf",
-        "command": "/home/user/zhf/.venv/bin/python -m scripts.risk.run",
+        "cwd": ".",
+        "command": "python -m scripts.risk.run",
         "env": {
           "OPENCODE_MODEL_RISK": "opencode/minimax-m2.5-free"
         }
@@ -64,26 +81,30 @@
       "heartbeat_cron": "*/5 * * * *"
     },
     {
+      "key": "execution",
       "name": "Sasha Kowalski",
       "title": "Head of Trade Execution",
       "reports_to": "Elara Voss",
+      "capabilities": "Executes only approved orders using deterministic broker adapters. No LLM is used for order decisions.",
       "adapter_type": "process",
       "adapter_config": {
-        "cwd": "/home/user/zhf",
-        "command": "/home/user/zhf/.venv/bin/python -m scripts.execution.run"
+        "cwd": ".",
+        "command": "python -m scripts.execution.run"
       },
       "budget_monthly_cents": 0,
       "heartbeat_cron": "* 13-22 * * 1-5",
       "execution_policy": "requires_cro_approval"
     },
     {
+      "key": "cost",
       "name": "Naomi Bergström",
       "title": "Head of Operational Efficiency",
       "reports_to": "Elara Voss",
+      "capabilities": "Reports fees, slippage, resource use, and operational cost recommendations. Does not place orders.",
       "adapter_type": "process",
       "adapter_config": {
-        "cwd": "/home/user/zhf",
-        "command": "/home/user/zhf/.venv/bin/python -m scripts.cost.run",
+        "cwd": ".",
+        "command": "python -m scripts.cost.run",
         "env": {
           "OPENCODE_MODEL_COST": "opencode/mimo-v2.5-flash-free"
         }
@@ -92,28 +113,52 @@
       "heartbeat_cron": "0 * * * *"
     },
     {
+      "key": "watchdog",
       "name": "Watchdog",
       "title": "System Monitor",
       "reports_to": "Elara Voss",
+      "capabilities": "Checks runtime health and reports faults. Does not place orders or reset the kill switch.",
       "adapter_type": "process",
       "adapter_config": {
-        "cwd": "/home/user/zhf",
-        "command": "/home/user/zhf/.venv/bin/python -m scripts.monitoring.watchdog"
+        "cwd": ".",
+        "command": "python -m scripts.monitoring.watchdog"
       },
       "budget_monthly_cents": 0,
       "heartbeat_cron": "*/10 * * * *"
+    }
+  ],
+  "tasks": [
+    {
+      "title": "ZHF | Review paper-trading configuration",
+      "description": "Confirm ENVIRONMENT=paper, DRY_RUN=true, ALPACA_PAPER=true, and that no live-order override is enabled. Do not copy API secrets into task comments.",
+      "priority": "high"
+    },
+    {
+      "title": "ZHF | Verify broker data connectivity",
+      "description": "After the board supplies paper credentials, validate read-only market-data and account connectivity for each enabled broker. Record only redacted results.",
+      "priority": "medium"
+    },
+    {
+      "title": "ZHF | Review risk and execution gates",
+      "description": "Check position, drawdown, minimum-notional, approval, and kill-switch behavior before enabling any scheduled agent heartbeat.",
+      "priority": "high"
+    },
+    {
+      "title": "ZHF | Approve operational readiness",
+      "description": "Human board task: review the synthetic pipeline report and paper-trading evidence. Live trading and scheduled execution remain disabled until this task is explicitly reviewed.",
+      "priority": "low"
     }
   ],
   "routines": {
     "daily_ceo": {
       "agent": "Elara Voss",
       "cron": "0 4 * * 2-6",
-      "task": "Führe den täglichen End-of-Day Briefing gemäss daily-briefing Skill aus. Lese alle Reports, schreibe daily_report.md. Nutze dafür opencode/nemotron-3-ultra-free."
+      "task": "Führe den täglichen End-of-Day Briefing gemäss daily-briefing Skill aus. Lese alle Reports, schreibe daily_report.md. Nutze das durch den Setup-Check verifizierte Modell."
     },
     "ceo_monthly_review": {
       "agent": "Elara Voss",
       "cron": "0 6 1 * *",
-      "task": "Monatsbericht: 30-Tage-Performance, Skalierungs-Empfehlung, Watchlist-Anpassung."
+      "task": "Monatsbericht: 30-Tage-Performance, Skalierungs-Empfehlung, Watchlist-Anpassung. Jede Live-Empfehlung braucht eine menschliche Freigabe."
     }
   },
   "execution_policies": {
@@ -125,6 +170,18 @@
     "preferred_provider": "opencode",
     "free_only": true,
     "fallback_provider": "lmstudio",
-    "fallback_when": ["network_error", "rate_limit", "timeout"]
+    "fallback_when": [
+      "network_error",
+      "rate_limit",
+      "timeout",
+      "model_unavailable"
+    ],
+    "models_are_selected_from_live_catalog": true
+  },
+  "safety": {
+    "agents_created_paused": true,
+    "heartbeat_enabled": false,
+    "initial_tasks_unassigned": true,
+    "live_trading_enabled": false
   }
 }

@@ -6,7 +6,13 @@ produziert und mit wem er kommuniziert.
 ---
 
 ## Modell-Übersicht (gilt für alle LLM-Agenten)
-**Primär: OpenCode Zen-Free-Modelle (keine API-Keys, keine Kosten):**
+
+Die Zen-IDs in dieser Tabelle sind Präferenzen, keine Verfügbarkeitsgarantie.
+`setup-script.sh` und `scripts/common/llm.py` prüfen den aktuellen Katalog und
+wählen pro Agent die erste verfügbare Fallback-ID. Nutzungsbedingungen, Limits
+und Kosten hängen vom aktuellen Provider-Angebot ab.
+
+**Bevorzugter Harness: OpenCode Zen, sofern die Modell-ID verfügbar ist:**
 
 | Free-Modell | Vendor | Context | Einsatz bei |
 |-------------|--------|---------|-------------|
@@ -21,10 +27,17 @@ produziert und mit wem er kommuniziert.
 | `neotone-3-ultra-free` / `nemotron-3-ultra-free` | NVIDIA | 204k | **CEO** (550B MoE, stärkstes Free-Modell) |
 | `nemotron-3.5-lightning-free` | NVIDIA | 16k | Einfache Tasks |
 
-**Fallback: LM Studio lokal** (Q4_K_M, nur bei Internet-/OpenCode-Ausfall):
-- `qwen2.5-7b-instruct-q4_k_m` → CEO
-- `llama-3.2-3b-instruct-q4_k_m` → Research/Risk
-- `qwen2.5-1.5b-instruct-q4_k_m` → Cost/Backtest-Review
+**Lokaler Fallback:** jeder geladene Modell-Endpunkt mit kompatibler OpenAI-API
+(`/v1/models`, z. B. LM Studio auf Port 1234, Ollama auf 11434, llama.cpp auf
+8080 oder vLLM auf 8000). Die Modell-IDs unten sind Beispielbelegungen und müssen
+in der lokalen Runtime geladen sein:
+- `qwen2.5-7b-instruct-q4_k_m` → Beispiel für CEO
+- `llama-3.2-3b-instruct-q4_k_m` → Beispiel für Research/Risk
+- `qwen2.5-1.5b-instruct-q4_k_m` → Beispiel für Cost/Backtest-Review
+
+> Die Heartbeat-Angaben in den Agentenprofilen sind Betriebs-Empfehlungen. Die
+> Provisionierung erstellt Agents mit deaktivierten Heartbeats; Betreiber schalten
+> Zeitpläne erst nach Prüfung der Reports/Risiko-Policies manuell frei.
 
 ---
 

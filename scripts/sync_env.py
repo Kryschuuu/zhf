@@ -41,6 +41,30 @@ def main(argv=None) -> int:
         print(f"FEHLER: {TEMPLATE} fehlt", file=sys.stderr)
         return 2
     want, have = _keys(TEMPLATE), _keys(ENV)
+    # Older template lines used `KEY=   # comment`; python-dotenv treats the
+    # comment text as the value when whitespace follows `=`. For known blank
+    # URL/path settings this is invalid, so repair only that exact placeholder
+    # shape while preserving every real operator-supplied value.
+    invalid_blank = [
+        key for key, default in want.items()
+        if not default.strip() and key in have and have[key].lstrip().startswith("#")
+    ]
+    if invalid_blank and args.check:
+        print(f"UNGÜLTIGE leere .env-Platzhalter: {', '.join(invalid_blank)}")
+        return 1
+    if invalid_blank:
+        lines = ENV.read_text(encoding="utf-8").splitlines()
+        repaired = []
+        for line in lines:
+            match = KEY.match(line.strip())
+            if match and match.group(1) in invalid_blank and match.group(2).lstrip().startswith("#"):
+                repaired.append(f"{match.group(1)}=")
+            else:
+                repaired.append(line)
+        ENV.write_text("\n".join(repaired) + "\n", encoding="utf-8")
+        print(f".env bereinigt: {', '.join(invalid_blank)} (ungültige Inline-Kommentare entfernt)")
+        have = _keys(ENV)
+
     missing = [(k, v) for k, v in want.items() if k not in have]
     unknown = sorted(set(have) - set(want))
 
